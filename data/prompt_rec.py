@@ -43,11 +43,16 @@ Use a mix of these categories for the `category_mix` and `referring_expressions`
 - **Action**: Current movement/action (e.g., "talking on the phone", "sitting").
 - **Part-of-Whole**: Specific parts (e.g., "mud on the wheels", "gold handle").
 
-### [Generation Principles]
-- **Natural Utterance**: Avoid robotic text like "The object is...". Write as if pointing at the object in a photo.
-- **Varied Structure**: Use questions, fragments, or inversions. Don't start every sentence the same way.
-- **No Metaphors**: Use direct nouns (e.g., "The box", not "The treasure").
-- **Consistency**: Ensure expression attributes do not contradict the `target_object` definition.
+### [Generation Principles - STRICT]
+1. **NO Questions**: Do NOT generate questions (e.g., "Which one is...?"). All expressions must be **declarative statements** describing the target.
+2. **Varied Syntax (No Fixed Slots)**:
+   - Do NOT use the same sentence structure for specific positions (e.g., do not always start the 2nd expression with "The...").
+   - Mix these styles randomly across the 3 expressions:
+     - *Standard*: "The red cup on the table."
+     - *Relative Clause*: "The cup that is sitting next to the lamp."
+     - *Reduced Relative*: "The cup positioned on the left."
+     - *Preposition Start*: "On the table, there is a red cup."
+3. **No Robot Speak**: Write naturally. Avoid "The target object is...".
 
 ---
 
