@@ -3,37 +3,45 @@ from langchain_core.output_parsers import JsonOutputParser
 from data.schema_rec import RECResponse
 from APIs import get_random_words
 
-# --- System Prompt 수정: 배치 대응 지침 추가 ---
 SYSTEM_PROMPT_TEMPLATE = """
 [System]
 You are a [Dataset Generation Engine].
-You will be provided with a list of 'Ingredient Sets', numbered 1 to N.
-You must generate exactly N REC data samples.
+You will be provided with a list of 'Ingredient Sets' (numbered 1 to N).
+You must generate exactly N REC data samples based on these sets.
 
-### [CRITICAL EXECUTION RULE]
-- **One-to-One Mapping**: 
-  - For generated sample #1, you MUST use [Ingredient Set #1].
-  - For generated sample #2, you MUST use [Ingredient Set #2].
-  - And so on.
-- Do NOT mix ingredients between sets.
-
-### [Execution Steps for Each Sample]
-1. [Scene Setup]: Establish a location/situation based on the assigned ingredient set.
-   - **Diversity**: Each sample must have a unique setting.
-2. [Target Selection]: Select a specific object based on the ingredients.
-   - **Rule**: Describe target using ONLY intrinsic properties (e.g., "A red ball").
-3. [Reference Generation]: Generate 5 types of discriminative expressions.
-
-### [5 Key Categories of Referring Expressions]
-- Attribute, Spatial, Comparative, Action, Part-of-Whole
+### [CRITICAL RULE]
+You MUST output the result in a valid JSON object format with a "result" key.
+Do NOT output any conversational text.
 
 ### [Ingredients Sets]
-The following list provides specific random words for each sample in this batch:
 {random_words_batch_list}
 
-### [Output Format]
-IMPORTANT: Output ONLY the JSON object (a list of objects). 
-No conversational text.
+### [Example Output Structure]
+(Use this EXACT format)
+{{
+    "result": [
+        {{
+            "scene": "A cluttered kitchen counter with various fruits.",
+            "target_object": "The yellow banana",
+            "referring_expressions": [
+                "the curved yellow fruit",
+                "the fruit next to the apple",
+                "the long yellow object in the bowl"
+            ],
+            "category_mix": ["Attribute", "Spatial", "Attribute"]
+        }},
+        {{
+            "scene": "A quiet park bench in autumn.",
+            "target_object": "The red maple leaf",
+            "referring_expressions": [
+                "the small red leaf on the seat",
+                "the colorful leaf",
+                "the leaf fallen from the tree"
+            ],
+            "category_mix": ["Spatial", "Attribute", "Action"]
+        }}
+    ]
+}}
 """
 
 def get_ingredients_batch_str(batch_size: int, n_words_per_sample: int = 5) -> str:
@@ -61,26 +69,21 @@ def get_ingredients_batch_str(batch_size: int, n_words_per_sample: int = 5) -> s
 
 
 def get_chain(llm, batch_size: int = 5, n_words: int = 5):
-   """
-   배치 크기에 맞춰 각각 다른 재료를 포함한 프롬프트를 생성하고 Chain을 반환합니다.
-   """
-   # 1. 배치 사이즈만큼의 서로 다른 재료 목록 생성
+   # 1. 배치 재료 생성
    batch_ingredients_str = get_ingredients_batch_str(batch_size, n_words)
 
    # 2. 파서 설정
    parser = JsonOutputParser(pydantic_object=RECResponse)
 
-   # 3. 템플릿 생성
+   # 3. 템플릿 생성 (format_instructions 제거 - 예시로 대체했으므로 혼동 방지)
    prompt = ChatPromptTemplate.from_messages([
       ("system", SYSTEM_PROMPT_TEMPLATE),
-      ("user", "Format Instructions:\n{format_instructions}"),
-      ("user", "Please generate {generate_num} distinct REC data samples. Use Ingredient Set #1 for the first item, Set #2 for the second, etc.")
+      ("user", "Please generate {generate_num} distinct REC data samples using the ingredients provided above.")
    ])
 
-   # 4. 변수 주입 (batch_ingredients_str를 여기에 넣습니다)
+   # 4. 변수 주입 (batch_ingredients_str만 주입)
    prompt_with_vars = prompt.partial(
-      random_words_batch_list=batch_ingredients_str,
-      format_instructions=parser.get_format_instructions()
+      random_words_batch_list=batch_ingredients_str
    )
 
    # 5. Chain 연결

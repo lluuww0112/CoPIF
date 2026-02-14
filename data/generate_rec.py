@@ -7,7 +7,7 @@ from datetime import datetime
 from tqdm import tqdm
 from langchain_ollama import ChatOllama
 
-from prompt_rec import get_chain
+from data.prompt_rec import get_chain
 
 def save_result(data, model_name, total_count):
     """Saves the accumulated generated data to the ./data/res directory."""
@@ -28,26 +28,33 @@ def save_result(data, model_name, total_count):
 def sanitize_json(text):
     """
     LLM의 출력에서 순수 JSON 부분만 추출합니다.
-    Markdown Code Block(```json ... ```)이나 앞뒤 잡담을 제거합니다.
+    Markdown Code Block 제거 및 가장 바깥쪽의 { } 또는 [ ]를 찾습니다.
     """
     # 1. Markdown code block 제거
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```', '', text)
+    text = text.strip()
     
-    # 2. 가장 처음 나오는 '[' 와 가장 마지막에 나오는 ']' 를 찾음
-    start_idx = text.find('[')
-    end_idx = text.rfind(']')
+    # 2. 가장 먼저 발견되는 괄호가 '{' 인지 '[' 인지 확인
+    # Pydantic 모델(RECResponse)이 객체이므로 '{'를 우선적으로 찾아야 함
+    first_brace = text.find('{')
+    first_bracket = text.find('[')
     
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        return text[start_idx : end_idx + 1]
-    
-    # 리스트 형식이 아닐 경우(단일 객체 등), '{' '}' 시도
-    start_idx_obj = text.find('{')
-    end_idx_obj = text.rfind('}')
-    if start_idx_obj != -1 and end_idx_obj != -1:
-         return text[start_idx_obj : end_idx_obj + 1]
+    # '{'가 존재하고, ('['보다 먼저 나오거나 '['가 없을 경우) -> 객체로 간주
+    if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
+        last_brace = text.rfind('}')
+        if last_brace != -1:
+            return text[first_brace : last_brace + 1]
+            
+    # 위의 경우가 아니고 '['가 존재하면 -> 리스트로 간주
+    if first_bracket != -1:
+        last_bracket = text.rfind(']')
+        if last_bracket != -1:
+            return text[first_bracket : last_bracket + 1]
 
-    return text.strip()
+    # 아무것도 못 찾으면 원본 반환 (파서 에러 유도)
+    return text
+
 
 def main():
     # 1. Argument Parsing
