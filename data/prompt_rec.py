@@ -124,7 +124,7 @@ def get_chain(llm, batch_size: int = 5, n_words: int = 5):
    # 3. 템플릿 생성 (format_instructions 제거 - 예시로 대체했으므로 혼동 방지)
    prompt = ChatPromptTemplate.from_messages([
       ("system", SYSTEM_PROMPT_TEMPLATE),
-      ("user", "Please generate {generate_num} distinct REC data samples using the ingredients provided above.")
+      ("user", "Generate {generate_num} distinct REC data samples using the ingredients provided above.")
    ])
 
    # 4. 변수 주입 (batch_ingredients_str만 주입)

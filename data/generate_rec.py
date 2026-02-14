@@ -63,20 +63,22 @@ def main():
     parser.add_argument("--total_num", type=int, default=10, help="Total number of items to generate")
     parser.add_argument("--batch_size", type=int, default=5, help="Number of items per LLM request")
     parser.add_argument("--temp", type=float, default=0.7, help="Temperature for generation")
-    
+    parser.add_argument("--context_size", type=int, default=4096, help="Context size for LLM")
+
     args = parser.parse_args()
 
     print(f"[*] Initializing Generator...")
     print(f"    - Model      : {args.model}")
     print(f"    - Total Target: {args.total_num}")
     print(f"    - Batch Size : {args.batch_size}")
-    
+    print(f"    - Context Size : {args.context_size}")
+
     # 2. Initialize LLM (LLM 객체는 재사용 가능하므로 밖에서 생성)
     try:
         llm = ChatOllama(
             model=args.model,
             temperature=args.temp,
-            num_ctx=4096 
+            num_ctx=args.ctx_size
         )
     except Exception as e:
         print(f"[Error] Failed to connect to Ollama: {e}")
