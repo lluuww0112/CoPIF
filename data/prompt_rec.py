@@ -122,4 +122,4 @@ def get_chain(llm, batch_size: int = 5, n_words: int = 5):
    # 5. Chain 연결
    chain = prompt_with_vars | llm
    
-   return chain, parser
+   return chain, parser, batch_ingredients_str
