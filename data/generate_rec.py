@@ -96,9 +96,7 @@ def main():
         
         # [핵심] get_chain 호출 시 current_batch_size를 전달
         # 내부적으로 1번부터 N번까지 서로 다른 랜덤 단어 리스트가 생성되어 프롬프트에 박힘
-        chain, output_parser, ingrediendts = get_chain(llm, batch_size=current_batch_size, n_words=5)
-
-        print(ingrediendts)
+        chain, output_parser = get_chain(llm, batch_size=current_batch_size, n_words=5)
 
         raw_response = "" 
         try:

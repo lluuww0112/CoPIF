@@ -90,7 +90,7 @@ def get_ingredients_batch_str(batch_size: int, n_words_per_sample: int = 5) -> s
    
    for i in range(batch_size):
       try:
-         words_list = get_random_words(path=path, n=n_words_per_sample)
+         words_list = get_random_words(file_path=path, n=n_words_per_sample)
          words_str = ", ".join(words_list)
       except Exception as e:
          print(str(e))
@@ -123,4 +123,4 @@ def get_chain(llm, batch_size: int = 5, n_words: int = 5):
    # 5. Chain 연결
    chain = prompt_with_vars | llm
    
-   return chain, parser, batch_ingredients_str
+   return chain, parser
