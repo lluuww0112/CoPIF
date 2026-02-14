@@ -3,6 +3,8 @@ from langchain_core.output_parsers import JsonOutputParser
 from data.schema_rec import RECResponse
 from APIs import get_random_words
 
+
+
 SYSTEM_PROMPT_TEMPLATE = """
 [System]
 You are a highly advanced [Dataset Generation Engine].
@@ -17,15 +19,21 @@ Your task is to generate exactly N REC (Referring Expression Generation) data sa
 ### [Execution Logic per Ingredient Set]
 For each input set, follow these steps to construct the data:
 
-1. **[Scene Setup]**: Establish a specific location and situation based on the provided ingredients.
+1. **[Ingredient Integration (Minimum 2)]**:
+   - Review the provided random words (ingredients) for this set.
+   - **MANDATORY**: You MUST select and utilize **at least two (2)** distinct words from the set to construct the scene and target.
+   - *Goal*: Create a relationship between the selected words (e.g., if inputs are 'Cat' and 'Sofa', generate a scene where "The cat is sleeping on the sofa").
+
+2. **[Scene Setup]**: Establish a specific location and situation based on the combined ingredients.
    - *Diversity Check*: Ensure the setting changes dynamically (e.g., Kitchen -> Park -> Office). Do not repeat the same background context consecutively.
 
-2. **[Target Selection]**: Select a main target object derived from the ingredients.
+3. **[Target Selection]**: Select ONE main target object derived from the ingredients used in step 1.
    - *Constraint*: Define the `target_object` using ONLY **intrinsic properties** (Type, Color, Shape).
    - *Prohibition*: Do NOT include temporary states, actions, or locations in the `target_object` field (e.g., Use "The red ball", NOT "The rolling red ball").
 
-3. **[Reference Generation]**: Generate 3 diverse referring expressions that uniquely identify the target using the specific categories below.
+4. **[Reference Generation]**: Generate 3 diverse referring expressions that uniquely identify the target using the specific categories below.
    - *Constraint*: Must assume similar distractors exist nearby; description must be discriminative.
+   - *Contextual Hint*: Use the *other* selected ingredient(s) as anchors (e.g., "The ball *next to the sofa*").
 
 ### [5 Key Categories for Expressions]
 Use a mix of these categories for the `category_mix` and `referring_expressions`:
@@ -73,7 +81,6 @@ Use a mix of these categories for the `category_mix` and `referring_expressions`
     ]
 }}
 """
-
 
 
 
