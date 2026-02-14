@@ -45,14 +45,15 @@ Use a mix of these categories for the `category_mix` and `referring_expressions`
 
 ### [Generation Principles - STRICT]
 1. **NO Questions**: Do NOT generate questions (e.g., "Which one is...?"). All expressions must be **declarative statements** describing the target.
-2. **Varied Syntax (No Fixed Slots)**:
-   - Do NOT use the same sentence structure for specific positions (e.g., do not always start the 2nd expression with "The...").
-   - Mix these styles randomly across the 3 expressions:
-     - *Standard*: "The red cup on the table."
-     - *Relative Clause*: "The cup that is sitting next to the lamp."
-     - *Reduced Relative*: "The cup positioned on the left."
-     - *Preposition Start*: "On the table, there is a red cup."
-3. **No Robot Speak**: Write naturally. Avoid "The target object is...".
+2. **Eliminate "The" Repetition (Anti-Robotic)**:
+   - **Strict Constraint**: It is FORBIDDEN to start all three expressions with the word "The". This pattern is considered robotic.
+   - **Required Variation**: You MUST vary the sentence structure to avoid monotony.
+     - *Start with Prepositions*: "On the counter, there is..."
+     - *Start with Participles*: "Wrapped around the..."
+     - *Start with Demonstratives*: "That set next to..."
+3. **Natural Human Tone**:
+   - Avoid rigid templates like "The target object is...".
+   - Write as if a human is casually pointing out an object to another person.
 
 ---
 

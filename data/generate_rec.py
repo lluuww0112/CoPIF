@@ -78,7 +78,7 @@ def main():
         llm = ChatOllama(
             model=args.model,
             temperature=args.temp,
-            num_ctx=args.ctx_size
+            num_ctx=args.context_size
         )
     except Exception as e:
         print(f"[Error] Failed to connect to Ollama: {e}")
