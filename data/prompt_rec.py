@@ -92,7 +92,8 @@ def get_ingredients_batch_str(batch_size: int, n_words_per_sample: int = 5) -> s
       try:
          words_list = get_random_words(path=path, n=n_words_per_sample)
          words_str = ", ".join(words_list)
-      except Exception:
+      except Exception as e:
+         print(str(e))
          words_str = "random object, unspecified scene"
       
       # "1. word1, word2, word3" 형식으로 저장
