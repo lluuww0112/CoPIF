@@ -24,17 +24,6 @@ You must act as a **Camera** or **CCTV**, not a storyteller.
     * NOT "Sipper", USE "Tumbler" or "Cup".
     * NOT "Pyre" (unless it's a funeral fire), USE "Pile" or "Stack".
 
-3.  **Referring Expression Validity (REC-SAFE)**: Every referring expression must be a standalone, unambiguous noun phrase.
-    * **Always include an explicit head noun** (target category): "the blue ceramic mug", "the striped pencil", "the man in a black jacket".
-    * **Never use vague placeholders** that don't specify a category:
-      - Forbidden: "the one", "that one", "the one next to ~", "the other one", "it", "this", "that".
-      - Bad: "the one next to the cup"
-      - Good: "the red apple next to the cup"
-    * **Relational/spatial expressions must name both objects**: "the mug next to the silver spoon" (NOT "the one next to the spoon").
-    * **Comparatives must state the comparison set explicitly** (with a plural noun or a clear container/group):
-      - Bad: "the smallest one", "the darker one", "the one closest to the wall"
-      - Good: "the smallest pencil among the pencils", "the darkest apple in the bowl", "the chair closest to the wall"
-
 ### [Execution Logic]
 For each input keyword:
 1. **[Target Definition]**:
@@ -45,13 +34,11 @@ For each input keyword:
 2.  **[Scene Setup]**: Invent a realistic, static visual scene.
 3.  **[Distractor Simulation]**: Imagine similar objects nearby to necessitate specific descriptions.
 4.  **[Reference Generation]**: Create 3 expressions based on **Pixel-Level Features** (Color, Shape, Texture, Position, Adjacency).
-    - Each expression must be independently resolvable without relying on "one/that/it".
-    - Prefer describing the target's category + attributes + a visible landmark or comparison set.
 
 ### [5 Key Categories for Expressions]
 - **Attribute**: Visual properties (e.g., "red", "rusty", "torn", "glossy").
 - **Spatial**: X/Y coordinates or relation to landmarks (e.g., "on the left", "closest to the wall").
-- **Comparative**: Visual contrast with an explicit comparison set (e.g., "the darker apple in the bowl", "larger than the green apple").
+- **Comparative**: Visual contrast (e.g., "the darker one", "larger than the apple").
 - **State**: Visible physical condition (e.g., "open", "empty", "shattered"). *Replaces abstract 'Action'.*
 - **Part-of-Whole**: Visible components (e.g., "with a wooden handle", "missing a button").
 
@@ -72,7 +59,7 @@ For each input keyword:
          "referring_expressions": [
             "blue mug with a chipped rim",
             "ceramic mug sitting on the woven coaster",
-            "empty ceramic mug, unlike the other mug filled with coffee"
+            "empty mug, unlike the one filled with coffee"
          ],
          "category_mix": ["Attribute", "Spatial", "Comparative"]
       }}
