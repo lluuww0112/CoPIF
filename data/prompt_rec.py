@@ -12,60 +12,75 @@ Your task is to generate exactly N REC (Referring Expression Comprehension) data
 
 ### [CRITICAL VISUAL CONSTRAINTS - MUST READ]
 You must act as a **Camera** or **CCTV**, not a storyteller.
-1.  **Strictly Visual Only**: Describe ONLY what can be verified by looking at a static JPEG image.
-    * NO Abstract/Emotional terms: (e.g., "kind", "honest", "reliable", "brave", "delicious").
-    * NO Non-Visual Senses: (e.g., "loud", "smelly", "hot temperature", "tasty").
-    * NO Invisible Relationships: (e.g., "the parson's daughter", "Mavin's favorite", "gift from mom"). Use "girl", "woman", "object" instead.
-    * NO Temporal/Causal Inference: (e.g., "waiting for a bus", "wrinkled from laughing", "broken by accident"). Describe only the current state ("standing at the stop", "wrinkled eyes", "broken pieces").
-    * NO Dynamic Action in Static Image: (e.g., "flickering light", "shivering"). Use static states ("dim light", "huddled posture").
+1. **Strictly Visual Only**: Describe ONLY what can be verified by looking at a static JPEG image.
+   - NO Abstract/Emotional terms (e.g., "kind", "honest", "reliable", "brave", "delicious").
+   - NO Non-Visual senses (e.g., "loud", "smelly", "hot temperature", "tasty").
+   - NO Invisible relationships (e.g., "the parson's daughter", "Mavin's favorite", "gift from mom").
+   - NO Temporal/Causal inference (e.g., "waiting for a bus", "broken by accident").
+   - NO Dynamic action in static image (e.g., "flickering", "shivering"). Use visible states only.
 
-2.  **Lexical Precision**: Use standard, dictionary-defined nouns.
-    * Avoid ambiguous or brand-specific slang unless visually obvious (e.g., NOT "Golden Ritz", USE "Golden Pastry").
-    * NOT "Sipper", USE "Tumbler" or "Cup".
-    * NOT "Pyre" (unless it's a funeral fire), USE "Pile" or "Stack".
+2. **Lexical Precision**: Use standard, dictionary-defined nouns.
+   - Avoid ambiguous or brand-specific slang unless visually obvious.
+   - NOT "Sipper", USE "Tumbler" or "Cup".
+   - NOT "Pyre" (unless funeral fire), USE "Pile" or "Stack".
+
+### [ANTI-TEMPLATE / DIVERSITY RULES - ABSOLUTELY CRITICAL]
+Small models tend to copy the example. YOU MUST NOT DO THAT.
+A) **Example is FORMAT ONLY**: The example below is ONLY to show JSON keys. It is NOT a style guide.
+B) **Do NOT imitate example phrasing**:
+   - Do NOT reuse the example's sentence patterns, rhythm, or word order.
+   - Do NOT repeatedly use the same leading forms like:
+     "the one with ...", "the ... on the ...", "..., unlike the ..."
+   - Do NOT keep the same 3-expression structure pattern across items.
+C) **Hard variety requirement inside each sample (3 expressions)**:
+   - Expression #1, #2, #3 MUST start differently (no shared first 1~2 words).
+   - Use different syntactic forms across the 3:
+     (noun phrase / prepositional phrase / comparative clause / part phrase etc.)
+   - Avoid repeating the same adjective pair or the same anchor phrase.
+D) **Hard variety requirement across samples**:
+   - Do NOT reuse the same scene framing (e.g., "A wooden table in a sunlit kitchen.") repeatedly.
+   - Do NOT reuse the same anchor landmarks (wall/table/shelf) across consecutive items.
+   - Vary viewpoint words (foreground/background/center/edge/corner) and object relations (next to/behind/overlapping/inside).
+E) If you notice you are repeating a pattern, you MUST rewrite before finalizing output.
 
 ### [Execution Logic]
 For each input keyword:
-1. **[Target Definition]**:
-   - The provided keyword is the seed.
-   - You MUST convert it into a concrete **Noun Phrase** for the `target_object`.
-   - Example: Input "Rowdy" -> Target "The rowdy group" (NOT just "Rowdy").
+1. **[Target Definition]**
+   - Convert keyword into a concrete **Noun Phrase** for `target_object`.
+   - Example: Input "Rowdy" -> Target "The rowdy group".
    - Example: Input "Old" -> Target "The old book".
-2.  **[Scene Setup]**: Invent a realistic, static visual scene.
-3.  **[Distractor Simulation]**: Imagine similar objects nearby to necessitate specific descriptions.
-4.  **[Reference Generation]**: Create 3 expressions based on **Pixel-Level Features** (Color, Shape, Texture, Position, Adjacency).
+2. **[Scene Setup]**: Invent a realistic, static visual scene.
+3. **[Distractor Simulation]**: Imagine similar objects nearby to necessitate specific descriptions.
+4. **[Reference Generation]**: Create 3 expressions based on **Pixel-Level Features** (Color, Shape, Texture, Position, Adjacency).
 
 ### [5 Key Categories for Expressions]
 - **Attribute**: Visual properties (e.g., "red", "rusty", "torn", "glossy").
 - **Spatial**: X/Y coordinates or relation to landmarks (e.g., "on the left", "closest to the wall").
 - **Comparative**: Visual contrast (e.g., "the darker one", "larger than the apple").
-- **State**: Visible physical condition (e.g., "open", "empty", "shattered"). *Replaces abstract 'Action'.*
+- **State**: Visible physical condition (e.g., "open", "empty", "shattered").
 - **Part-of-Whole**: Visible components (e.g., "with a wooden handle", "missing a button").
 
 ### [Formatting Rules]
-1.  **JSON Only**: Output a valid JSON object with a single "result" key.
-2.  **No Conversation**: Return raw JSON string only.
-3.  **Count Match**: Ensure output count equals input count.
+1. **JSON Only**: Output a valid JSON object with a single "result" key.
+2. **No Conversation**: Return raw JSON string only.
+3. **Count Match**: Ensure output count equals input count.
 
 ### [Input Data: Target Keywords]
 {random_words_batch_list}
 
-### [Output Example Structure]
+### [Output Example Structure]  (FORMAT ONLY - DO NOT COPY WORDING OR PATTERNS)
 {{
-   "result": [
-      {{
-         "scene": "A wooden table in a sunlit kitchen.",
-         "target_object": "The ceramic mug", 
-         "referring_expressions": [
-            "blue mug with a chipped rim",
-            "ceramic mug sitting on the woven coaster",
-            "empty mug, unlike the one filled with coffee"
-         ],
-         "category_mix": ["Attribute", "Spatial", "Comparative"]
-      }}
-   ]
+  "result": [
+    {{
+      "scene": "Example scene text.",
+      "target_object": "Example noun phrase.",
+      "referring_expressions": ["ex1", "ex2", "ex3"],
+      "category_mix": ["Attribute", "Spatial", "Comparative"]
+    }}
+  ]
 }}
 """
+
 
 
 def get_ingredients_batch_str(batch_size: int) -> str:
