@@ -1,0 +1,16 @@
+shared:
+  pretrained_clip: "openai/clip-vit-base-patch16"
+
+generator:
+  max_grid_width: 14
+
+
+
+model:
+  vision_model:
+    _target_: "model.base.clip_model.CLIPVisionModel"
+    pretrained_name: ${shared.pretrained_clip}
+
+  text_model:
+    _target_: "model.base.clip_model.CLIPTextModel"
+    pretrained_name: ${shared.pretrained_clip}
