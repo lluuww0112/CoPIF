@@ -24,13 +24,14 @@ class CLIPVisionModel(nn.Module):
         self,
         pixel_values: torch.Tensor,
     ) -> torch.Tensor:
-        """_summary_
+        """
+        Dense patch embeddings adapted from the last CLIP ViT block.
 
-        Args:
-            pixel_values (torch.Tensor): (batch_size, patch_num, vision_dim)
-
-        Returns:
-            patch_embeddins(torch.Tensor): (batch_size, patch_num, clip_latent_dim)
+        The final block is truncated to the value pathway used by MaskCLIP:
+        apply the block input LayerNorm, keep only the value projection, then
+        pass it through the attention output projection. The last block's
+        second LayerNorm and MLP are skipped for dense patch extraction.
+        Patch tokens are finally projected to the CLIP latent space.
         """
         
         hidden_states = self.vision_model.embeddings(pixel_values=pixel_values)
@@ -49,12 +50,16 @@ class CLIPVisionModel(nn.Module):
             else:
                 hidden_states = layer_outputs
 
-        # The final transformer block is reduced to the value projection only.
+        # For the last ViT block, keep only the value pathway from the final
+        # attention layer for dense patch extraction.
         last_layer = encoder_layers[-1]
-        value_inputs = last_layer.layer_norm1(hidden_states)
-        value_states = last_layer.self_attn.v_proj(value_inputs)
-        projected_tokens = self.visual_projection(value_states)
 
+        hidden_states = last_layer.layer_norm1(hidden_states)
+        hidden_states = last_layer.self_attn.v_proj(hidden_states)
+        hidden_states = last_layer.self_attn.out_proj(hidden_states)
+
+        # projection to image-text latent space
+        projected_tokens = self.visual_projection(hidden_states)
         patch_embeddings = projected_tokens[:, 1:, :]
         return patch_embeddings
 

@@ -1,9 +1,15 @@
 shared:
-  pretrained_clip: "openai/clip-vit-base-patch16"
+  pretrained_clip: "openai/clip-vit-large-patch14"
 
 generator:
-  max_grid_width: 14
+  device: "cpu"
+  max_grid_width: null # null로 설정되면 고정된 사이즈의 그리드맵을 생성
+  noise_scale: 0.1
 
+test:
+  maskclip:
+    text_noise_scale: 0.2
+    num_text_augmentations: 1
 
 
 model:

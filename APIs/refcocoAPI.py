@@ -35,6 +35,30 @@ class RefcocoModel(BaseModel):
 RefcocoModel_list = Annotated[List[RefcocoModel], Field(description="Refcoco 데이터 모델 리스트 입니다")]
 
 
+def _candidate_image_roots(data_root: str, refer: REFER) -> list[str]:
+    candidates = [
+        refer.IMAGE_DIR,
+        os.path.join(data_root, "images", "mscoco", "images", "train2014"),
+        os.path.join(data_root, "train2014"),
+        os.path.join(data_root, "images", "train2014"),
+    ]
+
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized not in unique_candidates:
+            unique_candidates.append(normalized)
+    return unique_candidates
+
+
+def _resolve_image_path(file_name: str, data_root: str, refer: REFER) -> Optional[str]:
+    for root in _candidate_image_roots(data_root=data_root, refer=refer):
+        candidate = os.path.join(root, file_name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def load_refcoco(
     data_root=DEFAULT_DATA_ROOT,
     dataset="refcoco",
@@ -63,8 +87,10 @@ def load_refcoco(
             ImageSizeModel(width=image["width"], height=image["height"])
             for image in images
         ]
-        file_root_path = os.path.join(data_root, "images", "mscoco", "images", "train2014")
-        image_paths = [os.path.join(file_root_path, file_name) for file_name in file_names]
+        image_paths = [
+            _resolve_image_path(file_name=file_name, data_root=data_root, refer=refer)
+            for file_name in file_names
+        ]
 
         print("num of file_names : ", len(file_names))
         print("num of sizes : ", len(sizes))
