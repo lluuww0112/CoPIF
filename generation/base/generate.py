@@ -11,7 +11,7 @@ import os
 from tqdm import tqdm
 
 from APIs.refcocoAPI import RefcocoModel_list, load_refcoco, BboxModel, ImageSizeModel
-from generation.base import grid_schema
+from generation.base import schema
 from model.base.clip_model import CLIPTextModel
 
 
@@ -35,13 +35,13 @@ def encode_annotations(
     return text_embeddings
 
 
-def bbox_to_grid_coords(feature_map: grid_schema.FeatureMapModel) -> tuple[int, int, int, int]:
+def bbox_to_grid_coords(feature_map: schema.FeatureMapModel) -> tuple[int, int, int, int]:
     if feature_map.size is None:
         raise ValueError("size is required to map bbox coordinates to the grid.")
 
-    grid_size = feature_map.grid.grid_size
+    grid_size = feature_map.grid_size
     if grid_size is None:
-        raise ValueError("grid.grid_size is not set.")
+        raise ValueError("grid_size is not set.")
 
     image_width = feature_map.size.width
     image_height = feature_map.size.height
@@ -64,7 +64,7 @@ def bbox_to_grid_coords(feature_map: grid_schema.FeatureMapModel) -> tuple[int, 
     return grid_x0, grid_y0, grid_x1, grid_y1
 
 
-def normalize_bbox(feature_map: grid_schema.FeatureMapModel) -> BboxModel:
+def normalize_bbox(feature_map: schema.FeatureMapModel) -> BboxModel:
     if feature_map.size is None:
         raise ValueError("size is required to normalize bbox.")
 
@@ -82,13 +82,13 @@ def normalize_bbox(feature_map: grid_schema.FeatureMapModel) -> BboxModel:
 
 
 def fill_bbox_with_annotation_embedding(
-    feature_map: grid_schema.FeatureMapModel,
+    feature_map: schema.FeatureMapModel,
     annotation_embedding: torch.Tensor,
-) -> grid_schema.FeatureMapModel:
+) -> schema.FeatureMapModel:
     if feature_map.feature_map is None:
         raise ValueError("feature_map is not initialized.")
 
-    emb_dim = grid_schema.EMB_DIM
+    emb_dim = schema.EMB_DIM
     if emb_dim is None:
         raise ValueError("EMB_DIM is not initialized. Call grid_schema.init_globals(config) first.")
 
@@ -104,16 +104,16 @@ def fill_bbox_with_annotation_embedding(
 
 
 def resize_feature_map_if_needed(
-    feature_map: grid_schema.FeatureMapModel,
+    feature_map: schema.FeatureMapModel,
     target_grid_size: int | None,
-) -> grid_schema.FeatureMapModel:
+) -> schema.FeatureMapModel:
     if target_grid_size is None:
         return feature_map
 
     if feature_map.feature_map is None:
         raise ValueError("feature_map is not initialized.")
 
-    current_grid_size = feature_map.grid.grid_size
+    current_grid_size = feature_map.grid_size
     if current_grid_size == target_grid_size:
         return feature_map
 
@@ -123,14 +123,14 @@ def resize_feature_map_if_needed(
         mode="nearest",
     )
     feature_map.feature_map = resized.squeeze(0).permute(1, 2, 0).contiguous()
-    feature_map.grid.grid_size = target_grid_size
+    feature_map.grid_size = target_grid_size
     return feature_map
 
 
 def add_gaussian_noise(
-    feature_map: grid_schema.FeatureMapModel,
+    feature_map: schema.FeatureMapModel,
     noise_scale: float,
-) -> grid_schema.FeatureMapModel:
+) -> schema.FeatureMapModel:
     if noise_scale < 0:
         raise ValueError("noise_scale must be non-negative.")
 
@@ -146,12 +146,12 @@ def add_gaussian_noise(
 
 
 def preprocess_feature_map(
-    feature_map: grid_schema.FeatureMapModel,
+    feature_map: schema.FeatureMapModel,
     annotation_embedding: torch.Tensor,
     noise_scale: float,
-) -> grid_schema.FeatureMapModel:
+) -> schema.FeatureMapModel:
     feature_map = fill_bbox_with_annotation_embedding(feature_map, annotation_embedding)
-    feature_map = resize_feature_map_if_needed(feature_map, grid_schema.MAX_GRID_WIDTH)
+    feature_map = resize_feature_map_if_needed(feature_map, schema.MAX_GRID_WIDTH)
     feature_map = add_gaussian_noise(feature_map, noise_scale)
     return feature_map
 
@@ -160,14 +160,13 @@ def build_single_feature_map(
     sample,
     text_embedding: torch.Tensor,
     noise_scale: float,
-) -> grid_schema.FeatureMapModel:
-    feature_map = grid_schema.FeatureMapModel(
+) -> schema.FeatureMapModel:
+    feature_map = schema.FeatureMapModel(
         image_id=sample.image_id,
         image_path=sample.image_path,
         size=sample.size,
         bbox=sample.bbox,
         annotation=sample.annotation,
-        grid=grid_schema.Grid(),
     )
     return preprocess_feature_map(
         feature_map=feature_map,
@@ -176,42 +175,68 @@ def build_single_feature_map(
     )
 
 
-def build_feature_maps(
-    refcoco_samples: RefcocoModel_list,
-    text_model: CLIPTextModel,
-    tokenizer: CLIPTokenizer,
-    device: torch.device,
+def to_save_model(
+    feature_map: schema.FeatureMapModel,
+) -> "SaveModel | None":
+    if feature_map.image_path is None:
+        return None
+
+    return SaveModel(
+        image_path=feature_map.image_path,
+        feature_map=feature_map.feature_map.detach().cpu(),
+        size=feature_map.size,
+        bbox=normalize_bbox(feature_map),
+        annotation=feature_map.annotation,
+    )
+
+
+def build_save_model_batch(
+    samples: list,
+    text_embeddings: torch.Tensor,
     noise_scale: float,
     num_workers: int,
-) -> list[grid_schema.FeatureMapModel]:
-    valid_samples = [sample for sample in refcoco_samples if sample.size is not None]
-    annotations = [sample.annotation for sample in valid_samples]
-    text_embeddings = encode_annotations(annotations, text_model, tokenizer, device)
+) -> tuple[list["SaveModel"], schema.FeatureMapModel | None]:
     worker_inputs = [
         (sample, text_embedding.detach().cpu(), noise_scale)
-        for sample, text_embedding in zip(valid_samples, text_embeddings)
+        for sample, text_embedding in zip(samples, text_embeddings)
     ]
 
+    save_models = []
+    sample_preview: schema.FeatureMapModel | None = None
+
     if num_workers <= 1:
-        return [
-            build_single_feature_map(sample, text_embedding, current_noise_scale)
-            for sample, text_embedding, current_noise_scale in tqdm(
-                worker_inputs,
-                total=len(worker_inputs),
-                desc="Generating feature maps",
-            )
-        ]
+        for sample, text_embedding, current_noise_scale in tqdm(
+            worker_inputs,
+            total=len(worker_inputs),
+            desc="Generating feature maps",
+            leave=False,
+        ):
+            feature_map = build_single_feature_map(sample, text_embedding, current_noise_scale)
+            if sample_preview is None:
+                sample_preview = feature_map
+
+            save_model = to_save_model(feature_map)
+            if save_model is not None:
+                save_models.append(save_model)
+
+        return save_models, sample_preview
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        feature_maps = list(
-            tqdm(
-                executor.map(lambda args: build_single_feature_map(*args), worker_inputs),
-                total=len(worker_inputs),
-                desc="Generating feature maps",
-            )
-        )
+        for feature_map in tqdm(
+            executor.map(lambda args: build_single_feature_map(*args), worker_inputs),
+            total=len(worker_inputs),
+            desc="Generating feature maps",
+            leave=False,
+        ):
+            if sample_preview is None:
+                sample_preview = feature_map
 
-    return feature_maps
+            save_model = to_save_model(feature_map)
+            if save_model is not None:
+                save_models.append(save_model)
+
+    return save_models, sample_preview
+
 
 class SaveModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -223,52 +248,114 @@ class SaveModel(BaseModel):
     annotation: str
 
 
-def to_save_models(
-    feature_maps: list[grid_schema.FeatureMapModel],
-) -> list[SaveModel]:
-    save_models: list[SaveModel] = []
-
-    for feature_map in feature_maps:
-        if feature_map.image_path is None:
-            continue
-
-        save_models.append(
-            SaveModel(
-                image_path=feature_map.image_path,
-                feature_map=feature_map.feature_map.detach().cpu(),
-                size=feature_map.size,
-                bbox=normalize_bbox(feature_map),
-                annotation=feature_map.annotation,
-            )
-        )
-
-    return save_models
-
-
-def save_feature_maps(
-    save_models: list[SaveModel],
+def _feature_map_output_dir(
     dataset: str,
     splitby: str,
     split: str,
 ) -> Path:
-    output_dir = Path("data") / "generated" / dataset / splitby / split
-    output_dir.mkdir(parents=True, exist_ok=True)
+    return Path("data") / "generated" / dataset / splitby / split
 
-    output_path = output_dir / "feature_maps.pt"
+
+def save_feature_map_chunk(
+    save_models: list[SaveModel],
+    output_dir: Path,
+    chunk_index: int,
+) -> Path:
+    output_path = output_dir / f"feature_maps.chunk_{chunk_index:05d}.pt"
     torch.save(save_models, output_path)
     return output_path
+
+
+def save_feature_map_manifest(
+    output_dir: Path,
+    chunk_paths: list[Path],
+    total_generated: int,
+    total_saved: int,
+    annotation_batch_size: int,
+) -> Path:
+    manifest = {
+        "format": "chunked_save_models_v1",
+        "total_generated": total_generated,
+        "total_saved": total_saved,
+        "annotation_batch_size": annotation_batch_size,
+        "chunks": [path.name for path in chunk_paths],
+    }
+
+    output_path = output_dir / "feature_maps.pt"
+    torch.save(manifest, output_path)
+    return output_path
+
+
+def generate_and_save_feature_maps(
+    refcoco_samples: RefcocoModel_list,
+    text_model: CLIPTextModel,
+    tokenizer: CLIPTokenizer,
+    device: torch.device,
+    noise_scale: float,
+    num_workers: int,
+    dataset: str,
+    splitby: str,
+    split: str,
+    annotation_batch_size: int,
+) -> tuple[Path, int, int, schema.FeatureMapModel | None]:
+    valid_samples = [sample for sample in refcoco_samples if sample.size is not None]
+    output_dir = _feature_map_output_dir(dataset=dataset, splitby=splitby, split=split)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    chunk_paths: list[Path] = []
+    total_saved = 0
+    sample_preview: schema.FeatureMapModel | None = None
+
+    total_batches = (len(valid_samples) + annotation_batch_size - 1) // annotation_batch_size
+
+    for chunk_index, start in enumerate(
+        tqdm(range(0, len(valid_samples), annotation_batch_size), total=total_batches, desc="Generating feature map chunks")
+    ):
+        sample_batch = valid_samples[start:start + annotation_batch_size]
+        annotations = [sample.annotation for sample in sample_batch]
+        text_embeddings = encode_annotations(annotations, text_model, tokenizer, device)
+        save_models, chunk_preview = build_save_model_batch(
+            samples=sample_batch,
+            text_embeddings=text_embeddings,
+            noise_scale=noise_scale,
+            num_workers=num_workers,
+        )
+
+        if sample_preview is None and chunk_preview is not None:
+            sample_preview = chunk_preview
+
+        chunk_path = save_feature_map_chunk(
+            save_models=save_models,
+            output_dir=output_dir,
+            chunk_index=chunk_index,
+        )
+        chunk_paths.append(chunk_path)
+        total_saved += len(save_models)
+
+        del text_embeddings
+        del save_models
+
+    manifest_path = save_feature_map_manifest(
+        output_dir=output_dir,
+        chunk_paths=chunk_paths,
+        total_generated=len(valid_samples),
+        total_saved=total_saved,
+        annotation_batch_size=annotation_batch_size,
+    )
+    return manifest_path, len(valid_samples), total_saved, sample_preview
 
 
 
 @hydra.main(version_base=None, config_path="../../config", config_name="base")
 def main(config : DictConfig)->None:
-    grid_schema.init_globals(config)
+    schema.init_globals(config)
     device = config.generator.device
     noise_scale = config.generator.noise_scale
     num_workers = max(1, min(8, os.cpu_count() or 1))
-    dataset = "refcoco"
-    splitby = "unc"
-    split = "train"
+    annotation_batch_size = int(config.generator.get("annotation_batch_size", 512))
+    dataset = config.generator.dataset
+    splitby = config.generator.splitby
+    split = config.generator.split
     text_model = instantiate(config.model.text_model)
     tokenizer = CLIPTokenizer.from_pretrained(config.shared.pretrained_clip)
 
@@ -282,37 +369,34 @@ def main(config : DictConfig)->None:
         include_image_metadata=True,
     )
 
-    feature_maps = build_feature_maps(
+    output_path, generated_count, saved_count, sample = generate_and_save_feature_maps(
         refcoco_samples=refcoco_samples,
         text_model=text_model,
         tokenizer=tokenizer,
         device=device,
         noise_scale=noise_scale,
         num_workers=num_workers,
-    )
-    save_models = to_save_models(feature_maps)
-    output_path = save_feature_maps(
-        save_models=save_models,
         dataset=dataset,
         splitby=splitby,
         split=split,
+        annotation_batch_size=annotation_batch_size,
     )
 
     print(f"device: {device}")
     print(f"noise_scale: {noise_scale}")
     print(f"num_workers: {num_workers}")
+    print(f"annotation_batch_size: {annotation_batch_size}")
     print(f"dataset: {dataset}")
     print(f"splitby: {splitby}")
     print(f"split: {split}")
     print(f"loaded refcoco samples: {len(refcoco_samples)}")
-    print(f"generated feature maps: {len(feature_maps)}")
-    print(f"saved feature maps: {len(save_models)}")
+    print(f"generated feature maps: {generated_count}")
+    print(f"saved feature maps: {saved_count}")
     print(f"save path: {output_path}")
 
-    if feature_maps:
-        sample = feature_maps[0]
+    if sample is not None:
         print(f"sample annotation: {sample.annotation}")
-        print(f"sample grid size: {sample.grid.grid_size}")
+        print(f"sample grid size: {sample.grid_size}")
         print(f"sample feature_map shape: {tuple(sample.feature_map.shape)}")
         print(f"sample bbox grid coords: {bbox_to_grid_coords(sample)}")
 

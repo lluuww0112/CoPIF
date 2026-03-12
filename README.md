@@ -94,13 +94,13 @@
 
 1. `refcocoAPI.load_refcoco(...)`를 이용해 `RefcocoModel_list`를 불러옴
 2. 각 샘플에서 `annotation`, `bbox`, `size`, `image_path`를 사용함
-3. CLIP text encoder로 annotation을 batch 단위로 임베딩함
-4. 각 annotation마다 `FeatureMapModel`을 하나씩 생성함
+3. annotation을 일정 크기 청크로 나눈 뒤, 각 청크마다 CLIP text encoder로 batch 임베딩함
+4. 각 annotation마다 `FeatureMapModel`을 하나씩 생성하되, 청크 단위로만 메모리에 유지함
 5. `FeatureMapModel` 생성 시 `(grid_size, grid_size, emb_dim)` 형태의 feature map이 랜덤 벡터로 초기화됨
 6. bbox를 이미지 크기 기준으로 grid 좌표에 정규화한 뒤, 해당 영역 전체를 annotation 임베딩 벡터로 채움
 7. `MAX_GRID_WIDTH`가 `None`이 아니면 최근접 이웃 보간으로 모든 feature map을 동일한 크기로 맞춤
 8. 전체 feature map에 Gaussian noise를 추가함. 이 때 noise scale은 하이퍼파라미터로 조절 가능함
-9. 최종 결과는 `SaveModel` 형태로 묶어 `data/generated/<dataset>/<splitby>/<split>/feature_maps.pt`에 저장함
+9. 최종 결과는 `SaveModel` 청크 파일들(`feature_maps.chunk_*.pt`)과 manifest 파일(`feature_maps.pt`) 형태로 `data/generated/<dataset>/<splitby>/<split>/`에 저장함
 10. 저장 시 bbox는 원본 픽셀 좌표가 아니라 정규화된 `(x, y, w, h)` 값으로 변환되며, 복구를 위해 원본 이미지 크기도 함께 저장함
 
 ## 7. 구현 세부 사항
@@ -110,12 +110,12 @@
 - `MAX_GRID_WIDTH`가 설정되어 있으면 `1 ~ MAX_GRID_WIDTH` 범위의 랜덤 정방형 grid가 생성됨
 - bbox 투영은 `(x, y, w, h)`를 이미지 크기 `(width, height)` 기준으로 정규화하여 grid 인덱스로 변환하는 방식으로 수행됨
 - 리사이즈는 `torch.nn.functional.interpolate(..., mode="nearest")`를 사용하므로, bbox 내부에 채운 동일한 임베딩 벡터는 업샘플 과정에서 주변 칸으로 그대로 복제됨
-- annotation 인코딩은 batch로 수행하고, 샘플별 feature map 생성 및 후처리는 병렬 처리와 `tqdm` 진행률 표시를 사용함
+- annotation 인코딩은 청크별 batch로 수행하고, 샘플별 feature map 생성 및 후처리는 병렬 처리와 `tqdm` 진행률 표시를 사용함
 - 데이터 저장 시 `bbox`는 정규화된 값으로 변환하고, `size`를 함께 저장해 평가 시 원본 스케일로 복구할 수 있게 함
 
 ## 8. 저장 형식
 ---
-현재 저장되는 각 샘플은 다음 정보를 포함함
+각 청크 파일에는 다음 정보를 포함하는 `SaveModel` 리스트가 저장됨
 
 - `image_path`
 - `feature_map`
@@ -123,6 +123,8 @@
 - `bbox`
 - `annotation`
 
-여기서 `bbox`는 정규화된 좌표이며, `size`는 원본 이미지 크기임
+manifest 파일 `feature_maps.pt`에는 저장 포맷 버전, 청크 파일 목록, 생성 개수, 저장 개수가 포함됨
+
+여기서 각 `SaveModel`의 `bbox`는 정규화된 좌표이며, `size`는 원본 이미지 크기임
 
 즉 학습 시에는 정규화된 bbox를 바로 회귀 target으로 사용할 수 있고, 평가 시에는 `size`를 이용해 원본 좌표계 bbox로 복구할 수 있음
