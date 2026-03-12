@@ -266,9 +266,9 @@ def main(config : DictConfig)->None:
     device = config.generator.device
     noise_scale = config.generator.noise_scale
     num_workers = max(1, min(8, os.cpu_count() or 1))
-    dataset = "refcoco"
-    splitby = "unc"
-    split = "train"
+    dataset = config.generator.dataset
+    splitby = config.generator.splitby
+    split = config.generator.split
     text_model = instantiate(config.model.text_model)
     tokenizer = CLIPTokenizer.from_pretrained(config.shared.pretrained_clip)
 

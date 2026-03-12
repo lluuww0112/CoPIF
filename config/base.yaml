@@ -5,6 +5,9 @@ generator:
   device: "cpu"
   max_grid_width: null # null로 설정되면 고정된 사이즈의 그리드맵을 생성
   noise_scale: 0.1
+  dataset: "refcoco"
+  splitby: "unc"
+  split: "train"
 
 test:
   maskclip:
