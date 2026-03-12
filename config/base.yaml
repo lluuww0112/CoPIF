@@ -1,10 +1,10 @@
 shared:
   pretrained_clip: "openai/clip-vit-large-patch14"
+  noise_scale: 0.2
 
 generator:
-  device: "cpu"
+  device: "cuda"
   max_grid_width: null # null로 설정되면 고정된 사이즈의 그리드맵을 생성
-  noise_scale: 0.1
   annotation_batch_size: 512
   dataset: "refcoco"
   splitby: "unc"
@@ -12,7 +12,7 @@ generator:
 
 test:
   maskclip:
-    text_noise_scale: 0.2
+    text_noise_scale: ${shared.noise_scale}
     num_text_augmentations: 1
 
 

@@ -127,39 +127,18 @@ def resize_feature_map_if_needed(
     return feature_map
 
 
-def add_gaussian_noise(
-    feature_map: schema.FeatureMapModel,
-    noise_scale: float,
-) -> schema.FeatureMapModel:
-    if noise_scale < 0:
-        raise ValueError("noise_scale must be non-negative.")
-
-    if feature_map.feature_map is None:
-        raise ValueError("feature_map is not initialized.")
-
-    if noise_scale == 0:
-        return feature_map
-
-    noise = torch.randn_like(feature_map.feature_map) * noise_scale
-    feature_map.feature_map = feature_map.feature_map + noise
-    return feature_map
-
-
 def preprocess_feature_map(
     feature_map: schema.FeatureMapModel,
     annotation_embedding: torch.Tensor,
-    noise_scale: float,
 ) -> schema.FeatureMapModel:
     feature_map = fill_bbox_with_annotation_embedding(feature_map, annotation_embedding)
     feature_map = resize_feature_map_if_needed(feature_map, schema.MAX_GRID_WIDTH)
-    feature_map = add_gaussian_noise(feature_map, noise_scale)
     return feature_map
 
 
 def build_single_feature_map(
     sample,
     text_embedding: torch.Tensor,
-    noise_scale: float,
 ) -> schema.FeatureMapModel:
     feature_map = schema.FeatureMapModel(
         image_id=sample.image_id,
@@ -171,7 +150,6 @@ def build_single_feature_map(
     return preprocess_feature_map(
         feature_map=feature_map,
         annotation_embedding=text_embedding,
-        noise_scale=noise_scale,
     )
 
 
@@ -193,11 +171,10 @@ def to_save_model(
 def build_save_model_batch(
     samples: list,
     text_embeddings: torch.Tensor,
-    noise_scale: float,
     num_workers: int,
 ) -> tuple[list["SaveModel"], schema.FeatureMapModel | None]:
     worker_inputs = [
-        (sample, text_embedding.detach().cpu(), noise_scale)
+        (sample, text_embedding.detach().cpu())
         for sample, text_embedding in zip(samples, text_embeddings)
     ]
 
@@ -205,13 +182,13 @@ def build_save_model_batch(
     sample_preview: schema.FeatureMapModel | None = None
 
     if num_workers <= 1:
-        for sample, text_embedding, current_noise_scale in tqdm(
+        for sample, text_embedding in tqdm(
             worker_inputs,
             total=len(worker_inputs),
             desc="Generating feature maps",
             leave=False,
         ):
-            feature_map = build_single_feature_map(sample, text_embedding, current_noise_scale)
+            feature_map = build_single_feature_map(sample, text_embedding)
             if sample_preview is None:
                 sample_preview = feature_map
 
@@ -291,7 +268,6 @@ def generate_and_save_feature_maps(
     text_model: CLIPTextModel,
     tokenizer: CLIPTokenizer,
     device: torch.device,
-    noise_scale: float,
     num_workers: int,
     dataset: str,
     splitby: str,
@@ -317,7 +293,6 @@ def generate_and_save_feature_maps(
         save_models, chunk_preview = build_save_model_batch(
             samples=sample_batch,
             text_embeddings=text_embeddings,
-            noise_scale=noise_scale,
             num_workers=num_workers,
         )
 
@@ -350,7 +325,6 @@ def generate_and_save_feature_maps(
 def main(config : DictConfig)->None:
     schema.init_globals(config)
     device = config.generator.device
-    noise_scale = config.generator.noise_scale
     num_workers = max(1, min(8, os.cpu_count() or 1))
     annotation_batch_size = int(config.generator.get("annotation_batch_size", 512))
     dataset = config.generator.dataset
@@ -374,7 +348,6 @@ def main(config : DictConfig)->None:
         text_model=text_model,
         tokenizer=tokenizer,
         device=device,
-        noise_scale=noise_scale,
         num_workers=num_workers,
         dataset=dataset,
         splitby=splitby,
@@ -383,7 +356,6 @@ def main(config : DictConfig)->None:
     )
 
     print(f"device: {device}")
-    print(f"noise_scale: {noise_scale}")
     print(f"num_workers: {num_workers}")
     print(f"annotation_batch_size: {annotation_batch_size}")
     print(f"dataset: {dataset}")
