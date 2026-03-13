@@ -1,13 +1,15 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import List
+from pydantic import ConfigDict, Field, model_validator
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 import random
+
 import torch
+from torch.utils.data import Dataset
 
 from transformers import CLIPModel
 
 from APIs.refcocoAPI import BboxModel, ImageSizeModel, RefcocoModel
-
 
 INPUT_RESOLUTION: int | None = None
 PATCH_NUM: int | None = None
@@ -65,14 +67,13 @@ def _require_embedding_dim() -> int:
 
 
 
-class Grid(BaseModel):
-    grid_size: int | None = Field(default_factory=_generate_grid_size)
-
-
 class FeatureMapModel(RefcocoModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    grid : Grid = Field(description="랜덤으로 생성된 정방형 feature map 그리드")
+    grid_size: int | None = Field(
+        default_factory=_generate_grid_size,
+        description="랜덤으로 생성된 정방형 feature map의 한 변 길이",
+    )
     feature_map: torch.Tensor | None = Field(
         default=None,
         description="(grid_size, grid_size, emb_dim) 형태의 feature map",
@@ -80,9 +81,9 @@ class FeatureMapModel(RefcocoModel):
 
     @model_validator(mode="after")
     def initialize_feature_map(self) -> "FeatureMapModel":
-        grid_size = self.grid.grid_size
+        grid_size = self.grid_size
         if grid_size is None:
-            raise ValueError("grid.grid_size must be set before feature map initialization.")
+            raise ValueError("grid_size must be set before feature map initialization.")
 
         emb_dim = _require_embedding_dim()
 
@@ -103,9 +104,9 @@ class FeatureMapModel(RefcocoModel):
         if self.size is None:
             raise ValueError("size is required to map bbox coordinates to the grid.")
 
-        grid_size = self.grid.grid_size
+        grid_size = self.grid_size
         if grid_size is None:
-            raise ValueError("grid.grid_size is not set.")
+            raise ValueError("grid_size is not set.")
 
         image_width = self.size.width
         image_height = self.size.height
@@ -143,6 +144,7 @@ class FeatureMapModel(RefcocoModel):
         )
 
 
+
 if __name__ == "__main__":
     example_config = OmegaConf.create({
         "shared": {"pretrained_clip": "openai/clip-vit-base-patch16"},
@@ -169,12 +171,11 @@ if __name__ == "__main__":
         size=ImageSizeModel(width=640, height=480),
         bbox=BboxModel(x=120, y=80, w=200, h=160),
         annotation="a dog on the grass",
-        grid=Grid(),
     )
 
     print(f"input_resolution: {INPUT_RESOLUTION}")
     print(f"patch_num: {PATCH_NUM}")
-    print(f"grid_size: {sample.grid.grid_size}")
+    print(f"grid_size: {sample.grid_size}")
     print(f"feature_map shape: {tuple(sample.feature_map.shape)}")
     print(f"bbox grid coords: {sample.bbox_to_grid_coords()}")
 

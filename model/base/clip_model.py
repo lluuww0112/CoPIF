@@ -87,6 +87,11 @@ class CLIPTextModel(nn.Module):
 
         return self.text_projection(eos_hidden_states)
 
+    def forward_full_sequence(self, **kwargs):
+        output = self.text_model(**kwargs)
+        return output.last_hidden_state
+        
+
 
 if __name__ == "__main__":
     import hydra
