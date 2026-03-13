@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import sys
+import time
 from urllib.parse import parse_qs, urlparse
 
 
@@ -57,14 +58,31 @@ def parse_args() -> argparse.Namespace:
         help="Skip files that already exist locally.",
     )
     parser.add_argument(
+        "--download-retries",
+        type=int,
+        default=3,
+        help="Number of retry attempts for transient download failures.",
+    )
+    parser.add_argument(
+        "--retry-wait",
+        type=float,
+        default=5.0,
+        help="Base wait time in seconds before retrying a failed download.",
+    )
+    parser.add_argument(
         "--user-agent",
         default=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         ),
-        help="User-Agent used when listing folder contents.",
+        help="User-Agent used when listing and downloading files.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.download_retries < 0:
+        parser.error("--download-retries must be 0 or greater.")
+    if args.retry_wait < 0:
+        parser.error("--retry-wait must be 0 or greater.")
+    return args
 
 
 def extract_folder_info(url: str) -> tuple[str, str | None]:
@@ -185,6 +203,65 @@ def file_url(file_id: str, resource_key: str | None) -> str:
     return f"https://drive.google.com/uc?id={file_id}"
 
 
+def download_file(
+    *,
+    gdown,
+    requests,
+    drive_file: DriveFile,
+    target_dir: Path,
+    quiet: bool,
+    resume: bool,
+    retries: int,
+    retry_wait: float,
+    user_agent: str,
+) -> str:
+    output_hint = str(target_dir) + "/"
+    total_attempts = max(1, retries + 1)
+
+    for attempt in range(1, total_attempts + 1):
+        try:
+            result = gdown.download(
+                url=file_url(drive_file.file_id, drive_file.resource_key),
+                output=output_hint,
+                quiet=quiet,
+                fuzzy=True,
+                resume=resume or attempt > 1,
+                user_agent=user_agent,
+            )
+        except requests.exceptions.RequestException as exc:
+            if attempt == total_attempts:
+                raise RuntimeError(
+                    "Download failed for "
+                    f"{drive_file.name} (id={drive_file.file_id}) after {total_attempts} "
+                    f"attempts due to a network error: {exc}"
+                ) from exc
+
+            wait_seconds = max(0.0, retry_wait) * attempt
+            print(
+                "Transient download error for "
+                f"{drive_file.name} (id={drive_file.file_id}) on attempt "
+                f"{attempt}/{total_attempts}: {exc}",
+                file=sys.stderr,
+            )
+            if wait_seconds > 0:
+                print(f"Retrying in {wait_seconds:.1f}s...", file=sys.stderr)
+                time.sleep(wait_seconds)
+            continue
+
+        if result is None:
+            raise RuntimeError(
+                "gdown could not complete the download for "
+                f"{drive_file.name} (id={drive_file.file_id}). "
+                "Check sharing permissions and remove duplicate .part files if they exist."
+            )
+
+        return result
+
+    raise RuntimeError(
+        f"Download failed for {drive_file.name} (id={drive_file.file_id}) for an unknown reason."
+    )
+
+
 def main() -> int:
     args = parse_args()
 
@@ -229,17 +306,20 @@ def main() -> int:
     downloaded_count = 0
     for drive_file, target_dir in downloads:
         target_dir.mkdir(parents=True, exist_ok=True)
-        output_hint = str(target_dir) + "/"
-
-        result = gdown.download(
-            url=file_url(drive_file.file_id, drive_file.resource_key),
-            output=output_hint,
-            quiet=args.quiet,
-            fuzzy=True,
-            resume=args.resume,
-        )
-        if result is None:
-            print(f"Failed to download file id={drive_file.file_id}", file=sys.stderr)
+        try:
+            download_file(
+                gdown=gdown,
+                requests=requests,
+                drive_file=drive_file,
+                target_dir=target_dir,
+                quiet=args.quiet,
+                resume=args.resume,
+                retries=args.download_retries,
+                retry_wait=args.retry_wait,
+                user_agent=args.user_agent,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
             return 1
         downloaded_count += 1
 

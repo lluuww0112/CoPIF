@@ -5,3 +5,7 @@ APIs/refer_python3_2024/data
 /outputs
 /test/res
 /data
+/history
+
+download_gdrive.log
+train.log

@@ -24,3 +24,32 @@ model:
   text_model:
     _target_: "model.base.clip_model.CLIPTextModel"
     pretrained_name: ${shared.pretrained_clip}
+
+  RECModel:
+    layer_num: 12
+    head_num: 8
+    dropout: 0.1
+
+train:
+  device: ${generator.device}
+  dataset: ${generator.dataset}
+  splitby: ${generator.splitby}
+  split: ${generator.split}
+  batch_size: 128
+  num_epochs: 20
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+  num_workers: 8
+  grad_clip: 1.0
+  log_every: 20
+  max_steps: 0
+  noise_scale: ${shared.noise_scale}
+  bbox_loss_coef: 5.0
+  giou_loss_coef: 2.0
+  checkpoint_dir: "history/base"
+  save_steps: 500
+  save_total_limit: 3
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  seed: 42
+  resume_from_checkpoint: null
