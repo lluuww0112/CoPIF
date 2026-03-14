@@ -2,7 +2,6 @@ from typing import List
 from pydantic import ConfigDict, Field, model_validator
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-import random
 
 import torch
 from torch.utils.data import Dataset
@@ -13,8 +12,16 @@ from APIs.refcocoAPI import BboxModel, ImageSizeModel, RefcocoModel
 
 INPUT_RESOLUTION: int | None = None
 PATCH_NUM: int | None = None
-MAX_GRID_WIDTH: int | None = None
 EMB_DIM: int | None = None
+BBOX_DUMMY_MIN_COSINE: float | None = None
+BBOX_DUMMY_MAX_COSINE: float | None = None
+OUTSIDE_BBOX_DUMMY_MIN_COSINE: float | None = None
+OUTSIDE_BBOX_DUMMY_MAX_COSINE: float | None = None
+BBOX_FOCUS_POWER: float | None = None
+BBOX_HOTSPOT_COUNT: int | None = None
+BBOX_HOTSPOT_BOOST: float | None = None
+BBOX_JITTER_STD: float | None = None
+OUTSIDE_JITTER_STD: float | None = None
 
 
 def _load_clip_embedding_dims(pretrained_model_name: str) -> tuple[int, int, int]:
@@ -35,23 +42,37 @@ def init_globals(config : DictConfig) -> None:
     """
         hydra로 정의한 값으로 전역변수 초기화
     """
-    global MAX_GRID_WIDTH
     global INPUT_RESOLUTION
     global PATCH_NUM
     global EMB_DIM
+    global BBOX_DUMMY_MIN_COSINE
+    global BBOX_DUMMY_MAX_COSINE
+    global OUTSIDE_BBOX_DUMMY_MIN_COSINE
+    global OUTSIDE_BBOX_DUMMY_MAX_COSINE
+    global BBOX_FOCUS_POWER
+    global BBOX_HOTSPOT_COUNT
+    global BBOX_HOTSPOT_BOOST
+    global BBOX_JITTER_STD
+    global OUTSIDE_JITTER_STD
 
-    MAX_GRID_WIDTH = config.generator.max_grid_width
     INPUT_RESOLUTION, PATCH_NUM, EMB_DIM = _load_clip_embedding_dims(
         config.shared.pretrained_clip
     )
+    BBOX_DUMMY_MIN_COSINE = float(config.generator.get("bbox_dummy_min_cosine", 0.9))
+    BBOX_DUMMY_MAX_COSINE = float(config.generator.get("bbox_dummy_max_cosine", 0.98))
+    OUTSIDE_BBOX_DUMMY_MIN_COSINE = float(config.generator.get("outside_bbox_dummy_min_cosine", -0.2))
+    OUTSIDE_BBOX_DUMMY_MAX_COSINE = float(config.generator.get("outside_bbox_dummy_max_cosine", 0.1))
+    BBOX_FOCUS_POWER = float(config.generator.get("bbox_focus_power", 1.75))
+    BBOX_HOTSPOT_COUNT = int(config.generator.get("bbox_hotspot_count", 2))
+    BBOX_HOTSPOT_BOOST = float(config.generator.get("bbox_hotspot_boost", 0.2))
+    BBOX_JITTER_STD = float(config.generator.get("bbox_jitter_std", 0.03))
+    OUTSIDE_JITTER_STD = float(config.generator.get("outside_jitter_std", 0.02))
 
 
 def _generate_grid_size():
-    if MAX_GRID_WIDTH is None:
-        if PATCH_NUM is None:
-            raise ValueError("PATCH_NUM is not initialized. Call init_globals(config) first.")
-        return PATCH_NUM
-    return random.randint(1, MAX_GRID_WIDTH)
+    if PATCH_NUM is None:
+        raise ValueError("PATCH_NUM is not initialized. Call init_globals(config) first.")
+    return PATCH_NUM
     
 
 
@@ -72,7 +93,7 @@ class FeatureMapModel(RefcocoModel):
 
     grid_size: int | None = Field(
         default_factory=_generate_grid_size,
-        description="랜덤으로 생성된 정방형 feature map의 한 변 길이",
+        description="pretrained_clip의 patch grid에 맞춰 자동으로 정해지는 feature map 한 변 길이",
     )
     feature_map: torch.Tensor | None = Field(
         default=None,
@@ -143,42 +164,3 @@ class FeatureMapModel(RefcocoModel):
             device=self.feature_map.device,
         )
 
-
-
-if __name__ == "__main__":
-    example_config = OmegaConf.create({
-        "shared": {"pretrained_clip": "openai/clip-vit-base-patch16"},
-        "generator": {"max_grid_width": 14},
-    })
-
-    try:
-        init_globals(example_config)
-    except Exception as exc:
-        print(f"failed to initialize from CLIP config: {exc}")
-        INPUT_RESOLUTION = 224
-        PATCH_NUM = 14
-        MAX_GRID_WIDTH = example_config.generator.max_grid_width
-        EMB_DIM = 512
-        print(
-            "fallback values are used: "
-            f"input_resolution={INPUT_RESOLUTION}, patch_num={PATCH_NUM}, "
-            f"max_grid_width={MAX_GRID_WIDTH}, emb_dim={EMB_DIM}"
-        )
-
-    sample = FeatureMapModel(
-        image_id="example_image",
-        image_path=None,
-        size=ImageSizeModel(width=640, height=480),
-        bbox=BboxModel(x=120, y=80, w=200, h=160),
-        annotation="a dog on the grass",
-    )
-
-    print(f"input_resolution: {INPUT_RESOLUTION}")
-    print(f"patch_num: {PATCH_NUM}")
-    print(f"grid_size: {sample.grid_size}")
-    print(f"feature_map shape: {tuple(sample.feature_map.shape)}")
-    print(f"bbox grid coords: {sample.bbox_to_grid_coords()}")
-
-    text_embedding = torch.randn(EMB_DIM, dtype=torch.float32)
-    sample.apply_text_embedding(text_embedding)
-    print("text embedding was applied to the bbox region.")

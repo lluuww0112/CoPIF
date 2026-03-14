@@ -4,8 +4,16 @@ shared:
 
 generator:
   device: "cuda"
-  max_grid_width: null # null로 설정되면 고정된 사이즈의 그리드맵을 생성
   annotation_batch_size: 512
+  bbox_dummy_min_cosine: 0.03
+  bbox_dummy_max_cosine: 0.2
+  outside_bbox_dummy_min_cosine: -0.1
+  outside_bbox_dummy_max_cosine: 0.04
+  bbox_focus_power: 1.75
+  bbox_hotspot_count: 3
+  bbox_hotspot_boost: 0.17
+  bbox_jitter_std: 0.03
+  outside_jitter_std: 0.02
   dataset: "refcoco"
   splitby: "unc"
   split: "train"
@@ -35,8 +43,8 @@ train:
   dataset: ${generator.dataset}
   splitby: ${generator.splitby}
   split: ${generator.split}
-  batch_size: 128
-  num_epochs: 20
+  batch_size: 256
+  num_epochs: 10
   learning_rate: 1e-4
   weight_decay: 1e-4
   num_workers: 8
@@ -53,3 +61,57 @@ train:
   gradient_accumulation_steps: 1
   seed: 42
   resume_from_checkpoint: null
+
+fewshot:
+  device: ${train.device}
+  dataset: ${train.dataset}
+  splitby: ${train.splitby}
+  split: "train"
+  num_images: 500
+  batch_size: 16
+  num_epochs: 10
+  learning_rate: ${train.learning_rate}
+  weight_decay: ${train.weight_decay}
+  num_workers: ${train.num_workers}
+  grad_clip: ${train.grad_clip}
+  log_every: ${train.log_every}
+  max_steps: 0
+  noise_scale: 0.0
+  bbox_loss_coef: ${train.bbox_loss_coef}
+  giou_loss_coef: ${train.giou_loss_coef}
+  image_batch_size: 32 # few-shot용 feature map 생성 배치 크기
+  checkpoint_dir: "history/fewshot"
+  init_checkpoint_dir: ${train.checkpoint_dir}
+  feature_manifest_dir: null
+  feature_subset_name: null
+  save_steps: ${train.save_steps}
+  save_total_limit: ${train.save_total_limit}
+  warmup_steps: 0
+  gradient_accumulation_steps: 1
+  seed: ${train.seed}
+  resume_from_checkpoint: null
+
+invoke:
+  device: ${train.device}
+  dataset: "refcoco"
+  splitby: "unc"
+  split: "val"
+  batch_size: 256
+  max_samples: null
+  # checkpoint_dir: ${train.checkpoint_dir}
+  checkpoint_dir: "history/fewshot"
+  output_csv: null
+
+eval:
+  dataset: ${invoke.dataset}
+  splitby: ${invoke.splitby}
+  split:  ${invoke.split}
+  checkpoint_dir: ${invoke.checkpoint_dir}
+  input_csv: null
+  output_json: null
+  iou_thresholds: [0.25, 0.5, 0.75]
+  clip_to_image: true
+  worst_k: 5
+  visualization_dir: null
+  visualization_count: 10
+  visualization_seed: 20

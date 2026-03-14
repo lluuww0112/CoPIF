@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -32,10 +33,6 @@ class RECModel(nn.Module):
         self.image_encoder = image_encoder
         self.text_encoder = text_encoder
         self._freeze_backbone()
-
-        # backbone feature projection
-        self.image_proj = nn.Linear(emb_dim, emb_dim)
-        self.text_proj = nn.Linear(emb_dim, emb_dim)
 
         # x-attn decoder
         layer = nn.TransformerDecoderLayer(
@@ -88,8 +85,6 @@ class RECModel(nn.Module):
         nn.init.normal_(self.rep_token, std=0.02)
 
         trainable_modules = [
-            self.image_proj,
-            self.text_proj,
             self.decoder,
             self.bbox_mlp,
         ]
@@ -105,14 +100,30 @@ class RECModel(nn.Module):
                     nn.init.zeros_(submodule.bias)
 
 
-    def _backbone_forward(self, pixel_values, input_ids, attention_mask):
-        image_features = self.image_encoder(pixel_values)
-        text_featueres = self.text_encoder.forward_full_sequence(input_ids=input_ids, attention_mask=attention_mask)
+    def _encode_image_features(
+        self,
+        image_features: Optional[torch.Tensor] = None,
+        pixel_values: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if (image_features is None) == (pixel_values is None):
+            raise ValueError("Exactly one of image_features or pixel_values must be provided.")
 
-        image_features_projected = self.image_proj(image_features)
-        text_featueres_projected = self.text_proj(text_featueres)
-        
-        return image_features_projected, text_featueres_projected
+        if pixel_values is not None:
+            with torch.no_grad():
+                return self.image_encoder(pixel_values)
+
+        return image_features
+
+    def _encode_text_features(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        with torch.no_grad():
+            return self.text_encoder.forward_full_sequence(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
     
     def _decoder_forward(self, image_features: torch.Tensor, text_features: torch.Tensor, attention_mask: torch.Tensor):
         attention_mask = ~attention_mask.bool()
@@ -133,46 +144,61 @@ class RECModel(nn.Module):
             pred_boxes = torch.clamp(pred_boxes, 0.0, 1.0)
         return pred_boxes
 
-    def invoke(self, pixel_values: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor):
-        B = pixel_values.shape[0]
-        # backbone forward
-        image_features, text_featueres = self._backbone_forward(pixel_values, input_ids, attention_mask)
+    def _predict_from_image_features(
+        self,
+        image_features: torch.Tensor,
+        text_features: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        B = image_features.shape[0]
 
-        # add rep  token & PE
+        # add rep token & PE
         image_features = torch.cat([self.rep_token.expand(B, -1, -1), image_features], dim=1)
         image_features += self.pos_embed
 
         # decoder forward
-        decoder_output = self._decoder_forward(image_features=image_features, text_features=text_featueres, attention_mask=attention_mask)
+        decoder_output = self._decoder_forward(
+            image_features=image_features,
+            text_features=text_features,
+            attention_mask=attention_mask,
+        )
 
         # bbox header forward
         rep_features = decoder_output[:, 0, :]
-        pred_boxes = self._bbox_header_forward(rep_features)
-        return pred_boxes
+        return self._bbox_header_forward(rep_features)
+
+    def invoke(self, pixel_values: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+        return self.forward(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
 
     
-    def forward(self, image_features: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor):
-        with torch.no_grad():
-            text_features = self.text_encoder.forward_full_sequence(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-        
-        text_features = self.text_proj(text_features)
-        image_features = self.image_proj(image_features)
-        
-        # add rep token & PE
-        B = image_features.shape[0]
-        image_features = torch.cat([self.rep_token.expand(B, -1, -1), image_features], dim=1)
-        image_features += self.pos_embed
-        
-        # decoder forward
-        decoder_output = self._decoder_forward(image_features=image_features, text_features=text_features, attention_mask=attention_mask)
+    def forward(
+        self,
+        image_features: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        pixel_values: Optional[torch.Tensor] = None,
+    ):
+        if input_ids is None or attention_mask is None:
+            raise ValueError("input_ids and attention_mask must be provided.")
 
-        # bbox header forward
-        rep_features = decoder_output[:, 0, :]
-        pred_boxes = self._bbox_header_forward(rep_features)
-        return pred_boxes
+        encoded_image_features = self._encode_image_features(
+            image_features=image_features,
+            pixel_values=pixel_values,
+        )
+        text_features = self._encode_text_features(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+
+        return self._predict_from_image_features(
+            image_features=encoded_image_features,
+            text_features=text_features,
+            attention_mask=attention_mask,
+        )
 
 
 if __name__ == "__main__":

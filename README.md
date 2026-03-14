@@ -67,10 +67,11 @@
 ---
 
 1. 기존 오픈 데이터셋에서 참조 표현(referring expression)과 bbox annotation을 추출
-2. 실제 입력 크기를 넘지 않는 범위에서 랜덤 사이즈의 그리드 맵을 생성한 뒤, 기존 bbox 위치에 맞춰 해당 영역에 참조 표현의 임베딩 벡터를 배치
+2. `pretrained_clip`의 입력 해상도와 patch size로부터 grid size를 자동 계산하여 고정 크기의 그리드 맵을 생성
 3. 참조 표현이 배치되지 않은 나머지 위치는 랜덤 벡터로 채움
-4. 생성된 그리드 맵을 최근접 이웃 보간법으로 최종 입력 feature map 크기에 맞춤
-5. 완성된 feature map으로 image-free 학습 수행
+4. bbox 내부는 단일 텍스트 임베딩을 그대로 복제하지 않고, 원본 임베딩과 cosine similarity가 비슷한 더미 벡터들을 파생시켜 채움
+5. 생성된 feature map 전체에 smoothing을 적용해 bbox 경계와 주변 패치가 너무 날카롭게 끊기지 않게 만듦
+6. 완성된 feature map으로 image-free 학습 수행
 
 
 ## 5. Original Image Feature Map과 Image-Free Feature Map 사이의 차원 불일치 문제
@@ -96,24 +97,31 @@
 2. 각 샘플에서 `annotation`, `bbox`, `size`, `image_path`를 사용함
 3. annotation을 일정 크기 청크로 나눈 뒤, 각 청크마다 CLIP text encoder로 batch 임베딩함
 4. 각 annotation마다 `FeatureMapModel`을 하나씩 생성하되, 청크 단위로만 메모리에 유지함
-5. `FeatureMapModel` 생성 시 `(grid_size, grid_size, emb_dim)` 형태의 feature map이 랜덤 벡터로 초기화됨
-6. bbox를 이미지 크기 기준으로 grid 좌표에 정규화한 뒤, 해당 영역 전체를 annotation 임베딩 벡터로 채움
-7. `MAX_GRID_WIDTH`가 `None`이 아니면 최근접 이웃 보간으로 모든 feature map을 동일한 크기로 맞춤
+5. `FeatureMapModel` 생성 시 `(grid_size, grid_size, emb_dim)` 형태의 feature map이 랜덤 벡터로 초기화되며, `grid_size`는 `pretrained_clip`의 patch grid와 동일하게 자동 선택됨
+6. bbox를 이미지 크기 기준으로 grid 좌표에 정규화한 뒤, 해당 영역에는 annotation 임베딩과 비슷한 cosine similarity를 갖는 더미 벡터들을 샘플링해 배치함
+7. bbox 주입이 끝난 뒤 feature map 전체에 Gaussian smoothing을 적용하고, 원본과 smoothed 결과를 blend하여 최종 map을 만듦
 8. 최종 결과는 `SaveModel` 청크 파일들(`feature_maps.chunk_*.pt`)과 manifest 파일(`feature_maps.pt`) 형태로 `data/generated/<dataset>/<splitby>/<split>/`에 저장함
 9. 저장 시 bbox는 원본 픽셀 좌표가 아니라 정규화된 `(x, y, w, h)` 값으로 변환되며, 복구를 위해 원본 이미지 크기도 함께 저장함
 
 ## 7. 구현 세부 사항
 ---
 - CLIP 입력 해상도와 한 변 patch 수는 pretrained CLIP 설정으로부터 자동으로 읽어옴
-- `PATCH_NUM = INPUT_RESOLUTION / patch_size` 이며, `MAX_GRID_WIDTH`가 `None`이면 기본 grid size는 `PATCH_NUM`이 됨
-- `MAX_GRID_WIDTH`가 설정되어 있으면 `1 ~ MAX_GRID_WIDTH` 범위의 랜덤 정방형 grid가 생성됨
+- `PATCH_NUM = INPUT_RESOLUTION / patch_size` 이며, 현재 생성 grid size는 항상 이 `PATCH_NUM`을 사용함
 - bbox 투영은 `(x, y, w, h)`를 이미지 크기 `(width, height)` 기준으로 정규화하여 grid 인덱스로 변환하는 방식으로 수행됨
-- feature map의 bbox 내부에는 annotation의 CLIP text embedding이 들어가고, bbox 외부 영역은 초기 랜덤 벡터가 유지됨
-- 리사이즈는 `torch.nn.functional.interpolate(..., mode="nearest")`를 사용하므로, bbox 내부에 채운 동일한 임베딩 벡터는 업샘플 과정에서 주변 칸으로 그대로 복제됨
+- feature map의 bbox 외부 영역은 초기 랜덤 벡터가 유지되고, bbox 내부는 annotation 임베딩과 유사한 dummy vector들로 채워짐
+- bbox 내부 dummy vector의 유사도 범위는 `bbox_dummy_min_cosine`, `bbox_dummy_max_cosine`으로 제어함
+- 생성 후에는 `smoothing_kernel_size`, `smoothing_sigma`, `smoothing_blend` 설정으로 Gaussian smoothing 강도를 조절함
+- 더 이상 별도 리사이즈/보간 단계는 수행하지 않음
 - annotation 인코딩은 청크별 batch로 수행하고, 샘플별 feature map 생성 및 후처리는 병렬 처리와 `tqdm` 진행률 표시를 사용함
 - 데이터 저장 시 `bbox`는 정규화된 값으로 변환하고, `size`를 함께 저장해 평가 시 원본 스케일로 복구할 수 있게 함
 
-## 8. 현재 구현된 RECModel 동작
+## 8. 현재 구현된 시각화 테스트
+---
+- `test/test_MaskCLIP_sim.py`는 실제 이미지에서 추출한 CLIP patch embedding과 text embedding 사이의 similarity heatmap을 시각화함
+- `test/test_CoPIF_sim.py`는 저장된 generated feature map과 text embedding 사이의 grid-text similarity heatmap을 시각화함
+- 두 스크립트 모두 `test/res/` 아래에 시각화 결과를 저장함
+
+## 9. 현재 구현된 RECModel 동작
 ---
 현재 `model/base/rec_model.py` 기준 `RECModel`은 추론과 학습 경로를 분리해서 사용함
 
@@ -123,7 +131,7 @@
 - 이 경로에서는 미리 생성된 image-free feature map을 `image_features`로 직접 입력받고, text encoder 출력과 cross-attention하여 bbox를 예측함
 - 현재 `RECModel` 내부에는 Gaussian noise 주입 로직이 없으며, 노이즈를 사용할 경우 데이터 로더나 학습 파이프라인 외부에서 별도로 처리해야 함
 
-## 9. 저장 형식
+## 10. 저장 형식
 ---
 각 청크 파일에는 다음 정보를 포함하는 `SaveModel` 리스트가 저장됨
 

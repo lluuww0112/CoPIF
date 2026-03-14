@@ -73,7 +73,6 @@ class CLIPTextModel(nn.Module):
         original_model = CLIPTextModelWithProjection.from_pretrained(pretrained_name)
         self.text_model = original_model.text_model
         self.text_projection = original_model.text_projection
-         
 
     def forward(self, **kwargs):
         output = self.text_model(**kwargs)
@@ -89,7 +88,16 @@ class CLIPTextModel(nn.Module):
 
     def forward_full_sequence(self, **kwargs):
         output = self.text_model(**kwargs)
-        return output.last_hidden_state
+        last_hidden_state = output.last_hidden_state
+        input_ids = kwargs["input_ids"]
+
+        eos_token_indices = input_ids.argmax(dim=-1)
+        batch_indices = torch.arange(last_hidden_state.size(0), device=last_hidden_state.device)
+        eos_hidden_states = last_hidden_state[batch_indices, eos_token_indices]
+        projected_eos_hidden_states = self.text_projection(eos_hidden_states)
+
+        last_hidden_state[batch_indices, eos_token_indices] = projected_eos_hidden_states
+        return last_hidden_state
         
 
 
