@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +244,7 @@ def main(config: DictConfig) -> None:
         output_csv = _resolve_project_path(output_csv_value)
 
     device = _resolve_device(requested_device=requested_device)
+    use_bf16 = device.type == "cuda" and getattr(torch.cuda, "is_bf16_supported", lambda: True)()
     checkpoint_path = _find_checkpoint_path(checkpoint_dir=checkpoint_dir)
 
     tokenizer = CLIPTokenizer.from_pretrained(config.shared.pretrained_clip)
@@ -293,11 +295,17 @@ def main(config: DictConfig) -> None:
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
-            pred_boxes = model.invoke(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            ).detach().cpu()
+            autocast_context = (
+                torch.autocast(device_type=device.type, dtype=torch.bfloat16)
+                if use_bf16 and device.type == "cuda"
+                else nullcontext()
+            )
+            with autocast_context:
+                pred_boxes = model.invoke(
+                    pixel_values=pixel_values,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                ).detach().cpu()
 
             for sample, pred_box in zip(batch["samples"], pred_boxes):
                 if sample.size is None:

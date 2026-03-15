@@ -96,6 +96,8 @@ class CLIPTextModel(nn.Module):
         eos_hidden_states = last_hidden_state[batch_indices, eos_token_indices]
         projected_eos_hidden_states = self.text_projection(eos_hidden_states)
 
+        if last_hidden_state.dtype != projected_eos_hidden_states.dtype:
+            last_hidden_state = last_hidden_state.to(projected_eos_hidden_states.dtype)
         last_hidden_state[batch_indices, eos_token_indices] = projected_eos_hidden_states
         return last_hidden_state
         
