@@ -361,6 +361,11 @@ def _build_training_arguments(
     requested_device: str,
     seed: int,
 ) -> TrainingArguments:
+    use_bf16 = (
+        requested_device == "cuda"
+        and torch.cuda.is_available()
+        and getattr(torch.cuda, "is_bf16_supported", lambda: True)()
+    )
     requested_kwargs = {
         "output_dir": str(checkpoint_dir),
         "overwrite_output_dir": False,
@@ -379,6 +384,8 @@ def _build_training_arguments(
         "report_to": "none",
         "max_steps": max_steps if max_steps > 0 else -1,
         "no_cuda": requested_device != "cuda",
+        "bf16": use_bf16,
+        "fp16": False,
         "save_safetensors": False,
         "seed": seed,
     }

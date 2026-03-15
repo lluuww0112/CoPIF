@@ -1,0 +1,65 @@
+shared:
+  pretrained_clip: "openai/clip-vit-large-patch14"
+
+model:
+  vision_model:
+    _target_: "model.comparison.clip_model.CLIPVisionModel"
+    pretrained_name: ${shared.pretrained_clip}
+
+  text_model:
+    _target_: "model.comparison.clip_model.CLIPTextModel"
+    pretrained_name: ${shared.pretrained_clip}
+
+  RECModel:
+    layer_num: 12
+    head_num: 8
+    dropout: 0.1
+
+train:
+  device: "cuda"
+  dataset: "refcoco"
+  splitby: "unc"
+  split: "train"
+  num_images: 100
+  batch_size: 10
+  num_epochs: 20
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+  num_workers: 8
+  grad_clip: 1.0
+  log_every: 20
+  max_steps: 0
+  bbox_loss_coef: 5.0
+  giou_loss_coef: 2.0
+  checkpoint_dir: "history/comparison"
+  init_checkpoint_dir: null
+  save_steps: 500
+  save_total_limit: 2
+  warmup_steps: 100
+  gradient_accumulation_steps: 1
+  seed: 42
+  resume_from_checkpoint: null
+
+invoke:
+  device: ${train.device}
+  dataset: "refcoco"
+  splitby: "unc"
+  split: "testA"
+  batch_size: 256
+  max_samples: null
+  checkpoint_dir: ${train.checkpoint_dir}
+  output_csv: null
+
+eval:
+  dataset: ${invoke.dataset}
+  splitby: ${invoke.splitby}
+  split: ${invoke.split}
+  checkpoint_dir: ${invoke.checkpoint_dir}
+  input_csv: null
+  output_json: null
+  iou_thresholds: [0.25, 0.5, 0.75]
+  clip_to_image: true
+  worst_k: 5
+  visualization_dir: null
+  visualization_count: 10
+  visualization_seed: 20
