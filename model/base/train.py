@@ -271,6 +271,7 @@ def _build_training_arguments(
 @hydra.main(version_base=None, config_path="../../config", config_name="base")
 def main(config: DictConfig) -> None:
     train_config = config.get("train", {})
+    preprocessing_config = config.get("preprocessing", {})
     requested_device = str(train_config.get("device", config.generator.device))
     batch_size = int(train_config.get("batch_size", 8))
     num_epochs = int(train_config.get("num_epochs", 1))
@@ -280,7 +281,7 @@ def main(config: DictConfig) -> None:
     grad_clip = float(train_config.get("grad_clip", 1.0))
     log_every = int(train_config.get("log_every", 10))
     max_steps = int(train_config.get("max_steps", 0))
-    noise_scale = float(train_config.get("noise_scale", config.shared.get("noise_scale", 0.0)))
+    noise_scale = float(preprocessing_config.get("noise_scale", 0.0))
     checkpoint_dir = Path(str(train_config.get("checkpoint_dir", "checkpoints")))
     save_steps = int(train_config.get("save_steps", 500))
     save_total_limit = int(train_config.get("save_total_limit", 2))

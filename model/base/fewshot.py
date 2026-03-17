@@ -96,6 +96,7 @@ def main(config: DictConfig) -> None:
     fewshot_config = config.get("fewshot", {})
     train_config = config.get("train", {})
     generator_config = config.get("generator", {})
+    preprocessing_config = config.get("preprocessing", {})
 
     requested_device = str(fewshot_config.get("device", train_config.get("device", generator_config.device)))
     device = _resolve_device(requested_device=requested_device)
@@ -116,7 +117,7 @@ def main(config: DictConfig) -> None:
     grad_clip = float(fewshot_config.get("grad_clip", train_config.get("grad_clip", 1.0)))
     log_every = int(fewshot_config.get("log_every", train_config.get("log_every", 10)))
     max_steps = int(fewshot_config.get("max_steps", 0))
-    noise_scale = float(fewshot_config.get("noise_scale", 0.0))
+    noise_scale = float(fewshot_config.get("noise_scale", preprocessing_config.get("noise_scale", 0.0)))
     save_steps = int(fewshot_config.get("save_steps", train_config.get("save_steps", 500)))
     save_total_limit = int(fewshot_config.get("save_total_limit", train_config.get("save_total_limit", 2)))
     warmup_steps = int(fewshot_config.get("warmup_steps", 0))

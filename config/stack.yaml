@@ -2,6 +2,10 @@ shared:
   pretrained_clip: "openai/clip-vit-large-patch14"
   noise_scale: 0.2
 
+preprocessing:
+  noise_scale: ${shared.noise_scale}
+  max_phrase_count: 8
+
 generator:
   device: "cuda"
   annotation_batch_size: 512
@@ -52,8 +56,6 @@ train:
   grad_clip: 1.0
   log_every: 20
   max_steps: 0
-  noise_scale: ${shared.noise_scale}
-  max_phrase_count: 8
   bbox_loss_coef: 5.0
   giou_loss_coef: 2.0
   checkpoint_dir: "history/stack"

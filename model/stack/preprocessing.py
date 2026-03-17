@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from PIL import Image
+
 import torch
-from transformers import CLIPTokenizer
+from transformers import CLIPImageProcessor, CLIPTokenizer
+
+_BICUBIC_RESAMPLE = (
+    Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC
+)
 
 
 def split_reference_expression(annotation: str) -> list[str]:
@@ -128,4 +134,61 @@ class TrainCollator:
             "attention_mask": text_inputs["attention_mask"],
             "phrase_mask": text_inputs["phrase_mask"],
             "bbox_targets": torch.stack(bbox_targets, dim=0),
+        }
+
+
+class InferenceCollator:
+    """
+    Collate raw images and word-level phrase inputs for stack inference.
+
+    Annotations are split on whitespace, tokenized phrase by phrase, and
+    returned together with `phrase_mask` for decoder cross-attention.
+    """
+
+    def __init__(
+        self,
+        image_processor: CLIPImageProcessor,
+        tokenizer: CLIPTokenizer,
+        input_res: int,
+        max_phrase_count: int,
+    ):
+        self.image_processor = image_processor
+        self.tokenizer = tokenizer
+        self.input_res = input_res
+        self.max_phrase_count = max_phrase_count
+
+    def __call__(self, batch: list[Any]) -> dict[str, Any]:
+        images = []
+        annotations = []
+
+        for sample in batch:
+            if sample.image_path is None:
+                raise ValueError("sample.image_path is required.")
+            with Image.open(sample.image_path) as image:
+                images.append(
+                    image.convert("RGB").resize(
+                        (self.input_res, self.input_res),
+                        resample=_BICUBIC_RESAMPLE,
+                    )
+                )
+            annotations.append(sample.annotation)
+
+        image_inputs = self.image_processor(
+            images=images,
+            return_tensors="pt",
+            do_resize=False,
+            do_center_crop=False,
+        )
+        text_inputs = build_phrase_text_inputs(
+            annotations=annotations,
+            tokenizer=self.tokenizer,
+            max_phrase_count=self.max_phrase_count,
+        )
+
+        return {
+            "samples": batch,
+            "pixel_values": image_inputs["pixel_values"],
+            "input_ids": text_inputs["input_ids"],
+            "attention_mask": text_inputs["attention_mask"],
+            "phrase_mask": text_inputs["phrase_mask"],
         }

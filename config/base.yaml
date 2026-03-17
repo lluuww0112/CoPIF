@@ -1,5 +1,7 @@
 shared:
   pretrained_clip: "openai/clip-vit-large-patch14"
+
+preprocessing:
   noise_scale: 0.2
 
 generator:
@@ -20,7 +22,7 @@ generator:
 
 test:
   maskclip:
-    text_noise_scale: ${shared.noise_scale}
+    text_noise_scale: ${preprocessing.noise_scale}
     num_text_augmentations: 1
     target_image_id: "132137" 
     target_texts: ["red", "luggage", "red luggage"] # e.g. ["red", "luggage", "red luggage"]
@@ -52,7 +54,6 @@ train:
   grad_clip: 1.0
   log_every: 20
   max_steps: 0
-  noise_scale: ${shared.noise_scale}
   bbox_loss_coef: 5.0
   giou_loss_coef: 2.0
   checkpoint_dir: "history/base"
