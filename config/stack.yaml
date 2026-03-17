@@ -22,16 +22,16 @@ test:
   maskclip:
     text_noise_scale: ${shared.noise_scale}
     num_text_augmentations: 1
-    target_image_id: "132137" 
-    target_texts: ["red", "luggage", "red luggage"] # e.g. ["red", "luggage", "red luggage"]
+    target_image_id: "132137"
+    target_texts: ["red", "luggage", "red luggage"]
 
 model:
   vision_model:
-    _target_: "model.base.clip_model.CLIPVisionModel"
+    _target_: "model.stack.clip_model.CLIPVisionModel"
     pretrained_name: ${shared.pretrained_clip}
 
   text_model:
-    _target_: "model.base.clip_model.CLIPTextModel"
+    _target_: "model.stack.clip_model.CLIPTextModel"
     pretrained_name: ${shared.pretrained_clip}
 
   RECModel:
@@ -53,9 +53,10 @@ train:
   log_every: 20
   max_steps: 0
   noise_scale: ${shared.noise_scale}
+  max_phrase_count: 8
   bbox_loss_coef: 5.0
   giou_loss_coef: 2.0
-  checkpoint_dir: "history/base"
+  checkpoint_dir: "history/stack"
   resume_from_checkpoint: null
   save_steps: 500
   save_total_limit: 3
@@ -80,8 +81,8 @@ fewshot:
   noise_scale: 0.0
   bbox_loss_coef: ${train.bbox_loss_coef}
   giou_loss_coef: ${train.giou_loss_coef}
-  image_batch_size: 32 # few-shot용 feature map 생성 배치 크기
-  checkpoint_dir: "history/fewshot"
+  image_batch_size: 32
+  checkpoint_dir: "history/stack_fewshot"
   init_checkpoint_dir: ${train.checkpoint_dir}
   feature_manifest_dir: null
   feature_subset_name: null
@@ -99,14 +100,13 @@ invoke:
   split: "val"
   batch_size: 256
   max_samples: null
-  # checkpoint_dir: ${train.checkpoint_dir}
-  checkpoint_dir: "history/base_fewshot"
+  checkpoint_dir: ${train.checkpoint_dir}
   output_csv: null
 
 eval:
   dataset: ${invoke.dataset}
   splitby: ${invoke.splitby}
-  split:  ${invoke.split}
+  split: ${invoke.split}
   checkpoint_dir: ${invoke.checkpoint_dir}
   input_csv: null
   output_json: null

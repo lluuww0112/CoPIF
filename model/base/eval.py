@@ -81,6 +81,30 @@ def _resolve_thresholds(raw_thresholds: Any) -> list[float]:
     return thresholds
 
 
+def _resolve_quantiles(raw_quantiles: Any) -> list[float]:
+    if raw_quantiles is None:
+        values = [0.0, 25.0, 50.0, 75.0, 100.0]
+    elif isinstance(raw_quantiles, ListConfig):
+        values = list(raw_quantiles)
+    elif isinstance(raw_quantiles, (list, tuple)):
+        values = list(raw_quantiles)
+    else:
+        values = [raw_quantiles]
+
+    quantiles = [float(value) for value in values]
+    if not quantiles:
+        raise ValueError("eval.bucket_quantiles must not be empty.")
+
+    normalized = [value / 100.0 if value > 1.0 else value for value in quantiles]
+    if normalized[0] != 0.0 or normalized[-1] != 1.0:
+        raise ValueError("eval.bucket_quantiles must start at 0 and end at 1 (or 0 and 100).")
+    if any(value < 0.0 or value > 1.0 for value in normalized):
+        raise ValueError("eval.bucket_quantiles must be within [0, 1] or [0, 100].")
+    if any(right <= left for left, right in zip(normalized, normalized[1:])):
+        raise ValueError("eval.bucket_quantiles must be strictly increasing.")
+    return normalized
+
+
 def _read_rows(input_csv: Path) -> list[dict[str, Any]]:
     if not input_csv.is_file():
         raise FileNotFoundError(f"inference csv not found: {input_csv}")
@@ -177,6 +201,106 @@ def _parse_box(row: dict[str, Any], prefix: str) -> tuple[float, float, float, f
     )
 
 
+def _build_ranked_rows(
+    rows: list[dict[str, Any]],
+    clip_to_image: bool,
+) -> list[dict[str, Any]]:
+    ranked_rows: list[dict[str, Any]] = []
+
+    for index, row in enumerate(rows):
+        image_width = _parse_float(row, "image_width")
+        image_height = _parse_float(row, "image_height")
+        pred_box = _parse_box(row, "pred")
+        gt_box = _parse_box(row, "gt")
+        iou = _compute_iou(
+            pred_box_xywh=pred_box,
+            gt_box_xywh=gt_box,
+            image_width=image_width,
+            image_height=image_height,
+            clip_to_image=clip_to_image,
+        )
+        ranked_rows.append(
+            {
+                "row_index": index,
+                "image_id": row.get("image_id"),
+                "annotation": row.get("annotation"),
+                "image_path": row.get("image_path"),
+                "iou": _round(iou),
+                "iou_raw": float(iou),
+                "pred_box": [_round(value, 4) for value in pred_box],
+                "gt_box": [_round(value, 4) for value in gt_box],
+                "row": row,
+            }
+        )
+
+    return ranked_rows
+
+
+def _format_bucket_label(start: float, end: float) -> str:
+    return f"p{int(round(start * 100)):02d}_to_p{int(round(end * 100)):02d}"
+
+
+def _summarize_ranked_subset(
+    bucket_label: str,
+    start_percentile: float,
+    end_percentile: float,
+    ranked_subset: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ious = [float(entry["iou_raw"]) for entry in ranked_subset]
+    return {
+        "bucket_label": bucket_label,
+        "percentile_range": [_round(start_percentile * 100.0, 2), _round(end_percentile * 100.0, 2)],
+        "candidate_count": len(ranked_subset),
+        "iou_min": _round(min(ious)) if ious else None,
+        "iou_mean": _round(_safe_mean(ious)) if ious else None,
+        "iou_max": _round(max(ious)) if ious else None,
+    }
+
+
+def _select_iou_bucket_samples(
+    ranked_rows: list[dict[str, Any]],
+    quantiles: list[float],
+    samples_per_bucket: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if samples_per_bucket <= 0 or not ranked_rows:
+        return []
+
+    sorted_rows = sorted(ranked_rows, key=lambda row: (row["iou_raw"], row["row_index"]))
+    row_count = len(sorted_rows)
+    boundaries = [min(row_count, max(0, int(math.floor(row_count * quantile)))) for quantile in quantiles[:-1]]
+    boundaries.append(row_count)
+
+    rng = random.Random(seed)
+    buckets: list[dict[str, Any]] = []
+
+    for bucket_index, (start, end) in enumerate(zip(quantiles, quantiles[1:])):
+        start_index = boundaries[bucket_index]
+        end_index = boundaries[bucket_index + 1]
+        if end == 1.0:
+            end_index = row_count
+
+        ranked_subset = sorted_rows[start_index:end_index]
+        bucket_label = _format_bucket_label(start, end)
+        summary = _summarize_ranked_subset(
+            bucket_label=bucket_label,
+            start_percentile=start,
+            end_percentile=end,
+            ranked_subset=ranked_subset,
+        )
+        sampled_entries = (
+            rng.sample(ranked_subset, k=min(samples_per_bucket, len(ranked_subset)))
+            if ranked_subset
+            else []
+        )
+        sampled_entries = sorted(sampled_entries, key=lambda row: (row["iou_raw"], row["row_index"]))
+        summary["sampled_count"] = len(sampled_entries)
+        summary["samples"] = sampled_entries
+        buckets.append(summary)
+
+    return buckets
+
+
 def _sanitize_slug(value: Any, fallback: str = "sample") -> str:
     cleaned = "".join(character if str(character).isalnum() else "_" for character in str(value))
     cleaned = cleaned.strip("_")
@@ -233,6 +357,7 @@ def _draw_labeled_box(
 
 
 def _build_overlay_lines(
+    image_id: Any,
     annotation: str,
     iou: float,
     image_width: int,
@@ -240,10 +365,368 @@ def _build_overlay_lines(
 ) -> list[str]:
     wrap_width = max(28, image_width // max(font_size, 12))
     wrapped_annotation = textwrap.wrap(annotation, width=wrap_width) or ["(empty annotation)"]
+    image_id_text = str(image_id) if image_id not in (None, "") else "(unknown)"
 
-    lines = [f"IoU: {iou:.4f} | GT: green | Pred: red", f"Ref: {wrapped_annotation[0]}"]
+    lines = [
+        f"Image ID: {image_id_text}",
+        f"IoU: {iou:.4f} | GT: green | Pred: red",
+        f"Ref: {wrapped_annotation[0]}",
+    ]
     lines.extend(f"     {line}" for line in wrapped_annotation[1:])
     return lines
+
+
+def _resolve_heatmap_device(requested_device: str | None) -> Any:
+    import torch
+
+    if requested_device == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if requested_device == "cuda":
+        print("heatmap cuda is not available. Falling back to cpu.")
+    return torch.device("cpu")
+
+
+def _load_heatmap_components(
+    pretrained_name: str,
+    requested_device: str | None,
+) -> dict[str, Any]:
+    import torch
+    from transformers import CLIPImageProcessor, CLIPTokenizer
+
+    from model.base.clip_model import CLIPTextModel, CLIPVisionModel
+
+    device = _resolve_heatmap_device(requested_device=requested_device)
+    vision_model = CLIPVisionModel(pretrained_name)
+    text_model = CLIPTextModel(pretrained_name)
+    image_processor = CLIPImageProcessor.from_pretrained(pretrained_name)
+    tokenizer = CLIPTokenizer.from_pretrained(pretrained_name)
+
+    vision_model.to(device).eval()
+    text_model.to(device).eval()
+
+    return {
+        "device": device,
+        "vision_model": vision_model,
+        "text_model": text_model,
+        "image_processor": image_processor,
+        "tokenizer": tokenizer,
+        "torch": torch,
+    }
+
+
+def _bbox_to_grid_coords(
+    box_xywh: tuple[float, float, float, float],
+    image_width: float,
+    image_height: float,
+    grid_size: int,
+) -> tuple[int, int, int, int]:
+    x0 = max(0.0, box_xywh[0])
+    y0 = max(0.0, box_xywh[1])
+    x1 = min(image_width, box_xywh[0] + max(box_xywh[2], 0.0))
+    y1 = min(image_height, box_xywh[1] + max(box_xywh[3], 0.0))
+
+    grid_x0 = min(grid_size - 1, int((x0 / image_width) * grid_size))
+    grid_y0 = min(grid_size - 1, int((y0 / image_height) * grid_size))
+    grid_x1 = max(grid_x0 + 1, min(grid_size, math.ceil((x1 / image_width) * grid_size)))
+    grid_y1 = max(grid_y0 + 1, min(grid_size, math.ceil((y1 / image_height) * grid_size)))
+    return grid_x0, grid_y0, grid_x1, grid_y1
+
+
+def _compute_similarity_map(
+    row: dict[str, Any],
+    heatmap_components: dict[str, Any],
+) -> tuple[Any, float, float]:
+    torch = heatmap_components["torch"]
+
+    image_path = Path(str(row["image_path"]))
+    annotation = str(row.get("annotation", ""))
+    if not image_path.is_file():
+        raise FileNotFoundError(f"image file not found for heatmap: {image_path}")
+
+    with Image.open(image_path) as image_file:
+        image = image_file.convert("RGB")
+
+    image_inputs = heatmap_components["image_processor"](images=image, return_tensors="pt")
+    image_inputs = {key: value.to(heatmap_components["device"]) for key, value in image_inputs.items()}
+
+    text_inputs = heatmap_components["tokenizer"](
+        [annotation],
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+    text_inputs = {key: value.to(heatmap_components["device"]) for key, value in text_inputs.items()}
+
+    with torch.no_grad():
+        patch_embeddings = heatmap_components["vision_model"](image_inputs["pixel_values"]).squeeze(0)
+        text_embedding = heatmap_components["text_model"](**text_inputs).squeeze(0)
+
+    patch_embeddings = torch.nn.functional.normalize(patch_embeddings, dim=-1)
+    text_embedding = torch.nn.functional.normalize(text_embedding, dim=-1)
+    similarity = torch.matmul(patch_embeddings, text_embedding)
+
+    patch_count = similarity.shape[0]
+    grid_size = int(math.sqrt(patch_count))
+    if grid_size * grid_size != patch_count:
+        raise ValueError(f"patch count must be a square number, got {patch_count}.")
+
+    similarity_map = similarity.reshape(grid_size, grid_size).detach().cpu()
+    gt_box = _parse_box(row, "gt")
+    image_width = _parse_float(row, "image_width")
+    image_height = _parse_float(row, "image_height")
+    grid_x0, grid_y0, grid_x1, grid_y1 = _bbox_to_grid_coords(
+        box_xywh=gt_box,
+        image_width=image_width,
+        image_height=image_height,
+        grid_size=grid_size,
+    )
+    inside = similarity_map[grid_y0:grid_y1, grid_x0:grid_x1]
+    bbox_mean = inside.mean().item()
+
+    outside_mask = torch.ones_like(similarity_map, dtype=torch.bool)
+    outside_mask[grid_y0:grid_y1, grid_x0:grid_x1] = False
+    outside_mean = similarity_map[outside_mask].mean().item()
+    return similarity_map, bbox_mean, outside_mean
+
+
+def _render_bucket_visualization(
+    row: dict[str, Any],
+    ranked_entry: dict[str, Any],
+    bucket_label: str,
+    sample_index: int,
+    output_dir: Path,
+    clip_to_image: bool,
+    heatmap_components: dict[str, Any] | None,
+) -> Path:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    image_path = Path(str(row["image_path"]))
+    if not image_path.is_file():
+        raise FileNotFoundError(f"image file not found: {image_path}")
+
+    image_width = _parse_float(row, "image_width")
+    image_height = _parse_float(row, "image_height")
+    pred_box = _parse_box(row, "pred")
+    gt_box = _parse_box(row, "gt")
+
+    if clip_to_image:
+        pred_xyxy = _clip_xyxy(_xywh_to_xyxy(pred_box), image_width=image_width, image_height=image_height)
+        gt_xyxy = _clip_xyxy(_xywh_to_xyxy(gt_box), image_width=image_width, image_height=image_height)
+        pred_box = (pred_xyxy[0], pred_xyxy[1], pred_xyxy[2] - pred_xyxy[0], pred_xyxy[3] - pred_xyxy[1])
+        gt_box = (gt_xyxy[0], gt_xyxy[1], gt_xyxy[2] - gt_xyxy[0], gt_xyxy[3] - gt_xyxy[1])
+
+    with Image.open(image_path) as image_file:
+        image = image_file.convert("RGB")
+
+    if heatmap_components is not None:
+        similarity_map, bbox_mean, outside_mean = _compute_similarity_map(
+            row=row,
+            heatmap_components=heatmap_components,
+        )
+        grid_size = int(similarity_map.shape[0])
+        gt_grid = _bbox_to_grid_coords(gt_box, image_width=image_width, image_height=image_height, grid_size=grid_size)
+        pred_grid = _bbox_to_grid_coords(pred_box, image_width=image_width, image_height=image_height, grid_size=grid_size)
+    else:
+        similarity_map = None
+        bbox_mean = None
+        outside_mean = None
+        gt_grid = None
+        pred_grid = None
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+
+    axes[0].imshow(image)
+    axes[0].add_patch(
+        Rectangle((gt_box[0], gt_box[1]), gt_box[2], gt_box[3], fill=False, edgecolor="lime", linewidth=2)
+    )
+    axes[0].add_patch(
+        Rectangle((pred_box[0], pred_box[1]), pred_box[2], pred_box[3], fill=False, edgecolor="red", linewidth=2)
+    )
+    axes[0].set_title("Prediction vs GT")
+    axes[0].axis("off")
+
+    if similarity_map is not None and gt_grid is not None and pred_grid is not None:
+        heatmap = axes[1].imshow(similarity_map.numpy(), cmap="magma", interpolation="nearest")
+        axes[1].add_patch(
+            Rectangle(
+                (gt_grid[0] - 0.5, gt_grid[1] - 0.5),
+                gt_grid[2] - gt_grid[0],
+                gt_grid[3] - gt_grid[1],
+                fill=False,
+                edgecolor="cyan",
+                linewidth=2,
+            )
+        )
+        axes[1].add_patch(
+            Rectangle(
+                (pred_grid[0] - 0.5, pred_grid[1] - 0.5),
+                pred_grid[2] - pred_grid[0],
+                pred_grid[3] - pred_grid[1],
+                fill=False,
+                edgecolor="white",
+                linewidth=2,
+                linestyle="--",
+            )
+        )
+        axes[1].set_title("Patch-text heatmap")
+        axes[1].set_xlabel("patch x")
+        axes[1].set_ylabel("patch y")
+        fig.colorbar(heatmap, ax=axes[1], fraction=0.046, pad=0.04)
+
+        axes[2].imshow(image)
+        axes[2].imshow(
+            similarity_map.numpy(),
+            cmap="magma",
+            alpha=0.55,
+            extent=(0, image_width, image_height, 0),
+            interpolation="bilinear",
+        )
+        axes[2].add_patch(
+            Rectangle((gt_box[0], gt_box[1]), gt_box[2], gt_box[3], fill=False, edgecolor="white", linewidth=2)
+        )
+        axes[2].add_patch(
+            Rectangle((pred_box[0], pred_box[1]), pred_box[2], pred_box[3], fill=False, edgecolor="red", linewidth=2)
+        )
+        axes[2].set_title("Heatmap overlay")
+        axes[2].axis("off")
+    else:
+        axes[1].imshow(image)
+        axes[1].set_title("Heatmap disabled")
+        axes[1].axis("off")
+        axes[2].imshow(image)
+        axes[2].set_title("Overlay skipped")
+        axes[2].axis("off")
+
+    wrapped_annotation = "\n".join(textwrap.wrap(f'annotation: "{row.get("annotation", "")}"', width=70))
+    stats = [
+        f"bucket={bucket_label}",
+        f"row={ranked_entry['row_index']}",
+        f"image_id={row.get('image_id', '(unknown)')}",
+        f"iou={ranked_entry['iou']:.4f}",
+    ]
+    if bbox_mean is not None and outside_mean is not None:
+        stats.append(f"gt_patch_mean={bbox_mean:.4f}")
+        stats.append(f"outside_patch_mean={outside_mean:.4f}")
+
+    fig.suptitle("IoU bucket benchmark", fontsize=14, fontweight="bold")
+    fig.text(
+        0.5,
+        0.02,
+        f"{wrapped_annotation}\n{' | '.join(stats)}",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        bbox={"boxstyle": "round,pad=0.4", "facecolor": "white", "alpha": 0.92, "edgecolor": "0.7"},
+    )
+
+    image_id_slug = _sanitize_slug(row.get("image_id", "image"), fallback="image")
+    output_path = output_dir / bucket_label / f"sample_{sample_index:02d}_row_{ranked_entry['row_index']:05d}_{image_id_slug}.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def _build_bucket_payload_sample(
+    ranked_entry: dict[str, Any],
+    visualization_path: str | None,
+) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in ranked_entry.items()
+        if key != "row"
+    }
+    payload["visualization_path"] = visualization_path
+    return payload
+
+
+def _visualize_iou_buckets(
+    ranked_rows: list[dict[str, Any]],
+    output_dir: Path | None,
+    quantiles: list[float],
+    samples_per_bucket: int,
+    seed: int,
+    clip_to_image: bool,
+    heatmap_enabled: bool,
+    pretrained_name: str,
+    requested_device: str | None,
+) -> dict[str, Any]:
+    bucket_payload = {
+        "quantiles": [_round(value * 100.0, 2) for value in quantiles],
+        "samples_per_bucket": samples_per_bucket,
+        "seed": seed,
+        "heatmap_enabled": heatmap_enabled,
+        "buckets": [],
+        "failures": [],
+    }
+
+    if output_dir is None or samples_per_bucket <= 0:
+        return bucket_payload
+
+    selected_buckets = _select_iou_bucket_samples(
+        ranked_rows=ranked_rows,
+        quantiles=quantiles,
+        samples_per_bucket=samples_per_bucket,
+        seed=seed,
+    )
+    if not selected_buckets:
+        return bucket_payload
+
+    heatmap_components = None
+    if heatmap_enabled:
+        heatmap_components = _load_heatmap_components(
+            pretrained_name=pretrained_name,
+            requested_device=requested_device,
+        )
+
+    saved_count = 0
+    for bucket in selected_buckets:
+        bucket_summary = {
+            key: value
+            for key, value in bucket.items()
+            if key != "samples"
+        }
+        bucket_summary["samples"] = []
+
+        for sample_index, ranked_entry in enumerate(bucket["samples"], start=1):
+            visualization_path = None
+            try:
+                saved_path = _render_bucket_visualization(
+                    row=ranked_entry["row"],
+                    ranked_entry=ranked_entry,
+                    bucket_label=str(bucket["bucket_label"]),
+                    sample_index=sample_index,
+                    output_dir=output_dir,
+                    clip_to_image=clip_to_image,
+                    heatmap_components=heatmap_components,
+                )
+                visualization_path = str(saved_path)
+                saved_count += 1
+            except Exception as error:
+                bucket_payload["failures"].append(
+                    f"bucket={bucket['bucket_label']}, row={ranked_entry['row_index']}: {error}"
+                )
+
+            bucket_summary["samples"].append(
+                _build_bucket_payload_sample(
+                    ranked_entry=ranked_entry,
+                    visualization_path=visualization_path,
+                )
+            )
+
+        bucket_payload["buckets"].append(bucket_summary)
+
+    if saved_count > 0:
+        print(f"saved {saved_count} IoU bucket visualization(s) to {output_dir}")
+    if bucket_payload["failures"]:
+        print("iou_bucket_visualization_failures:")
+        for failure in bucket_payload["failures"]:
+            print(f"  {failure}")
+
+    return bucket_payload
 
 
 def _render_visualization(
@@ -312,6 +795,7 @@ def _render_visualization(
     )
 
     overlay_lines = _build_overlay_lines(
+        image_id=row.get("image_id"),
         annotation=str(row.get("annotation", "")),
         iou=iou,
         image_width=image.width,
@@ -427,14 +911,14 @@ def _build_summary(
     thresholds: list[float],
     clip_to_image: bool,
     worst_k: int,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    ranked_rows = _build_ranked_rows(rows=rows, clip_to_image=clip_to_image)
     ious: list[float] = []
     pixel_abs_errors = {"x": [], "y": [], "w": [], "h": []}
     norm_abs_errors = {"x": [], "y": [], "w": [], "h": []}
     center_errors_px: list[float] = []
     center_errors_norm: list[float] = []
     area_ratios: list[float] = []
-    worst_rows: list[dict[str, Any]] = []
     unique_images: set[str] = set()
     unique_instances: set[tuple[str, float, float, float, float]] = set()
 
@@ -508,18 +992,6 @@ def _build_summary(
             )
         )
 
-        worst_rows.append(
-            {
-                "row_index": index,
-                "image_id": row.get("image_id"),
-                "annotation": row.get("annotation"),
-                "image_path": row.get("image_path"),
-                "iou": _round(iou),
-                "pred_box": [_round(value, 4) for value in pred_box],
-                "gt_box": [_round(value, 4) for value in gt_box],
-            }
-        )
-
     threshold_metrics = {
         f"acc@{threshold:.2f}": _round(sum(iou >= threshold for iou in ious) / len(ious))
         for threshold in thresholds
@@ -542,14 +1014,25 @@ def _build_summary(
         "threshold_metrics": threshold_metrics,
     }
 
-    worst_examples = sorted(worst_rows, key=lambda row: row["iou"])[: max(worst_k, 0)]
-    return summary, worst_examples
+    example_count = max(worst_k, 0)
+    summarized_ranked_rows = [
+        {
+            key: value
+            for key, value in ranked_row.items()
+            if key not in {"row", "iou_raw"}
+        }
+        for ranked_row in ranked_rows
+    ]
+    worst_examples = sorted(summarized_ranked_rows, key=lambda row: (row["iou"], row["row_index"]))[:example_count]
+    best_examples = sorted(summarized_ranked_rows, key=lambda row: (-row["iou"], row["row_index"]))[:example_count]
+    return summary, worst_examples, best_examples
 
 
 def _print_summary(
     input_csv: Path,
     summary: dict[str, Any],
     worst_examples: list[dict[str, Any]],
+    best_examples: list[dict[str, Any]],
 ) -> None:
     print(f"input_csv: {input_csv}")
     print(f"row_count: {summary['row_count']}")
@@ -595,6 +1078,16 @@ def _print_summary(
                 f"annotation={example['annotation']}"
             )
 
+    if best_examples:
+        print("best_examples:")
+        for example in best_examples:
+            print(
+                f"  row={example['row_index']}, "
+                f"image_id={example['image_id']}, "
+                f"iou={example['iou']:.6f}, "
+                f"annotation={example['annotation']}"
+            )
+
 
 def _run_evaluation(
     input_csv: Path,
@@ -605,21 +1098,49 @@ def _run_evaluation(
     visualization_dir: Path | None,
     visualization_count: int,
     visualization_seed: int,
+    bucket_quantiles: list[float],
+    bucket_samples_per_bucket: int,
+    bucket_seed: int,
+    heatmap_enabled: bool,
+    heatmap_pretrained_name: str,
+    heatmap_device: str | None,
 ) -> None:
     rows = _read_rows(input_csv=input_csv)
-    summary, worst_examples = _build_summary(
+    ranked_rows = _build_ranked_rows(rows=rows, clip_to_image=clip_to_image)
+    summary, worst_examples, best_examples = _build_summary(
         rows=rows,
         thresholds=thresholds,
         clip_to_image=clip_to_image,
         worst_k=worst_k,
     )
-    _print_summary(input_csv=input_csv, summary=summary, worst_examples=worst_examples)
+    _print_summary(
+        input_csv=input_csv,
+        summary=summary,
+        worst_examples=worst_examples,
+        best_examples=best_examples,
+    )
     visualization_paths = _visualize_samples(
         rows=rows,
         output_dir=visualization_dir,
         num_samples=visualization_count,
         seed=visualization_seed,
         clip_to_image=clip_to_image,
+    )
+    bucket_visualization_dir = (
+        visualization_dir / "iou_buckets"
+        if visualization_dir is not None
+        else input_csv.parent / f"{input_csv.stem}_iou_buckets"
+    )
+    iou_bucket_benchmarks = _visualize_iou_buckets(
+        ranked_rows=ranked_rows,
+        output_dir=bucket_visualization_dir,
+        quantiles=bucket_quantiles,
+        samples_per_bucket=bucket_samples_per_bucket,
+        seed=bucket_seed,
+        clip_to_image=clip_to_image,
+        heatmap_enabled=heatmap_enabled,
+        pretrained_name=heatmap_pretrained_name,
+        requested_device=heatmap_device,
     )
 
     if output_json is not None:
@@ -628,7 +1149,9 @@ def _run_evaluation(
             "input_csv": str(input_csv),
             "summary": summary,
             "worst_examples": worst_examples,
+            "best_examples": best_examples,
             "visualizations": visualization_paths,
+            "iou_bucket_benchmarks": iou_bucket_benchmarks,
         }
         with output_json.open("w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
@@ -651,6 +1174,13 @@ def _hydra_entry(config: DictConfig) -> None:
     worst_k = int(eval_config.get("worst_k", 5))
     visualization_count = int(eval_config.get("visualization_count", 10))
     visualization_seed = int(eval_config.get("visualization_seed", 42))
+    bucket_quantiles = _resolve_quantiles(eval_config.get("bucket_quantiles", None))
+    bucket_samples_per_bucket = int(eval_config.get("bucket_samples_per_bucket", 5))
+    bucket_seed = int(eval_config.get("bucket_seed", visualization_seed))
+    heatmap_enabled = bool(eval_config.get("heatmap_enabled", True))
+    heatmap_pretrained_name = str(eval_config.get("heatmap_pretrained_name", config.shared.pretrained_clip))
+    heatmap_device_value = eval_config.get("heatmap_device", None)
+    heatmap_device = str(heatmap_device_value) if heatmap_device_value not in (None, "") else None
 
     _run_evaluation(
         input_csv=input_csv,
@@ -661,6 +1191,12 @@ def _hydra_entry(config: DictConfig) -> None:
         visualization_dir=visualization_dir,
         visualization_count=visualization_count,
         visualization_seed=visualization_seed,
+        bucket_quantiles=bucket_quantiles,
+        bucket_samples_per_bucket=bucket_samples_per_bucket,
+        bucket_seed=bucket_seed,
+        heatmap_enabled=heatmap_enabled,
+        heatmap_pretrained_name=heatmap_pretrained_name,
+        heatmap_device=heatmap_device,
     )
 
 
@@ -696,7 +1232,12 @@ def _parse_cli_args(argv: list[str]) -> argparse.Namespace:
         help="Do not clip boxes to image boundaries before IoU computation.",
     )
     parser.set_defaults(clip_to_image=True)
-    parser.add_argument("--worst-k", type=int, default=5, help="Number of lowest-IoU rows to print.")
+    parser.add_argument(
+        "--worst-k",
+        type=int,
+        default=5,
+        help="Number of lowest/highest-IoU rows to print as failure/success examples.",
+    )
     parser.add_argument(
         "--visualization-dir",
         type=str,
@@ -715,6 +1256,45 @@ def _parse_cli_args(argv: list[str]) -> argparse.Namespace:
         default=42,
         help="Random seed used when sampling images for visualization.",
     )
+    parser.add_argument(
+        "--bucket-quantiles",
+        type=float,
+        nargs="+",
+        dest="bucket_quantiles",
+        default=[0.0, 25.0, 50.0, 75.0, 100.0],
+        help="IoU quantile bucket boundaries. Defaults to quartiles and accepts either [0, 25, 50, 75, 100] or [0, 0.25, 0.5, 0.75, 1].",
+    )
+    parser.add_argument(
+        "--bucket-samples-per-bucket",
+        type=int,
+        default=5,
+        help="Number of rows to sample from each IoU quantile bucket.",
+    )
+    parser.add_argument(
+        "--bucket-seed",
+        type=int,
+        default=42,
+        help="Random seed used when sampling rows within each IoU quantile bucket.",
+    )
+    parser.add_argument(
+        "--heatmap-device",
+        type=str,
+        default=None,
+        help="Device for patch-text heatmap generation. Defaults to cpu unless cuda is requested and available.",
+    )
+    parser.add_argument(
+        "--heatmap-pretrained-name",
+        type=str,
+        default="openai/clip-vit-large-patch14",
+        help="Pretrained CLIP checkpoint used for MaskCLIP-style heatmap generation.",
+    )
+    parser.add_argument(
+        "--disable-heatmap",
+        dest="heatmap_enabled",
+        action="store_false",
+        help="Disable MaskCLIP-style patch-text heatmap rendering for IoU bucket samples.",
+    )
+    parser.set_defaults(heatmap_enabled=True)
     return parser.parse_args(argv)
 
 
@@ -747,6 +1327,12 @@ def _cli_entry(argv: list[str]) -> None:
         visualization_dir=visualization_dir,
         visualization_count=int(args.visualization_count),
         visualization_seed=int(args.visualization_seed),
+        bucket_quantiles=_resolve_quantiles(args.bucket_quantiles),
+        bucket_samples_per_bucket=int(args.bucket_samples_per_bucket),
+        bucket_seed=int(args.bucket_seed),
+        heatmap_enabled=bool(args.heatmap_enabled),
+        heatmap_pretrained_name=str(args.heatmap_pretrained_name),
+        heatmap_device=str(args.heatmap_device) if args.heatmap_device is not None else None,
     )
 
 

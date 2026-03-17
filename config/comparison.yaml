@@ -63,3 +63,9 @@ eval:
   visualization_dir: null
   visualization_count: 10
   visualization_seed: 20
+  bucket_quantiles: [0, 25, 50, 75, 100]
+  bucket_samples_per_bucket: 5
+  bucket_seed: 20
+  heatmap_enabled: true
+  heatmap_pretrained_name: ${shared.pretrained_clip}
+  heatmap_device: null

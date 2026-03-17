@@ -16,14 +16,12 @@ from generation.base.generate import (
     generate_and_save_real_image_feature_maps,
     select_fewshot_image_samples,
 )
+from model.base.preprocessing import GeneratedFeatureMapDataset, TrainCollator, _torch_load
 from model.base.train import (
-    GeneratedFeatureMapDataset,
     RECTrainer,
-    TrainCollator,
     TrainingMonitorCallback,
     _build_rec_model,
     _build_training_arguments,
-    _torch_load,
 )
 
 

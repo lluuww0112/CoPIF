@@ -45,6 +45,13 @@ def _hydra_entry(config) -> None:
     worst_k = int(eval_config.get("worst_k", 5))
     visualization_count = int(eval_config.get("visualization_count", 10))
     visualization_seed = int(eval_config.get("visualization_seed", 42))
+    bucket_quantiles = base_eval._resolve_quantiles(eval_config.get("bucket_quantiles", None))
+    bucket_samples_per_bucket = int(eval_config.get("bucket_samples_per_bucket", 5))
+    bucket_seed = int(eval_config.get("bucket_seed", visualization_seed))
+    heatmap_enabled = bool(eval_config.get("heatmap_enabled", True))
+    heatmap_pretrained_name = str(eval_config.get("heatmap_pretrained_name", config.shared.pretrained_clip))
+    heatmap_device_value = eval_config.get("heatmap_device", None)
+    heatmap_device = str(heatmap_device_value) if heatmap_device_value not in (None, "") else None
 
     base_eval._run_evaluation(
         input_csv=input_csv,
@@ -55,6 +62,12 @@ def _hydra_entry(config) -> None:
         visualization_dir=visualization_dir,
         visualization_count=visualization_count,
         visualization_seed=visualization_seed,
+        bucket_quantiles=bucket_quantiles,
+        bucket_samples_per_bucket=bucket_samples_per_bucket,
+        bucket_seed=bucket_seed,
+        heatmap_enabled=heatmap_enabled,
+        heatmap_pretrained_name=heatmap_pretrained_name,
+        heatmap_device=heatmap_device,
     )
 
 
@@ -109,6 +122,45 @@ def _parse_cli_args(argv: list[str]) -> argparse.Namespace:
         default=42,
         help="Random seed used when sampling images for visualization.",
     )
+    parser.add_argument(
+        "--bucket-quantiles",
+        type=float,
+        nargs="+",
+        dest="bucket_quantiles",
+        default=[0.0, 25.0, 50.0, 75.0, 100.0],
+        help="IoU quantile bucket boundaries. Defaults to quartiles and accepts either [0, 25, 50, 75, 100] or [0, 0.25, 0.5, 0.75, 1].",
+    )
+    parser.add_argument(
+        "--bucket-samples-per-bucket",
+        type=int,
+        default=5,
+        help="Number of rows to sample from each IoU quantile bucket.",
+    )
+    parser.add_argument(
+        "--bucket-seed",
+        type=int,
+        default=42,
+        help="Random seed used when sampling rows within each IoU quantile bucket.",
+    )
+    parser.add_argument(
+        "--heatmap-device",
+        type=str,
+        default=None,
+        help="Device for patch-text heatmap generation. Defaults to cpu unless cuda is requested and available.",
+    )
+    parser.add_argument(
+        "--heatmap-pretrained-name",
+        type=str,
+        default="openai/clip-vit-large-patch14",
+        help="Pretrained CLIP checkpoint used for MaskCLIP-style heatmap generation.",
+    )
+    parser.add_argument(
+        "--disable-heatmap",
+        dest="heatmap_enabled",
+        action="store_false",
+        help="Disable MaskCLIP-style patch-text heatmap rendering for IoU bucket samples.",
+    )
+    parser.set_defaults(heatmap_enabled=True)
     return parser.parse_args(argv)
 
 
@@ -141,6 +193,12 @@ def _cli_entry(argv: list[str]) -> None:
         visualization_dir=visualization_dir,
         visualization_count=int(args.visualization_count),
         visualization_seed=int(args.visualization_seed),
+        bucket_quantiles=base_eval._resolve_quantiles(args.bucket_quantiles),
+        bucket_samples_per_bucket=int(args.bucket_samples_per_bucket),
+        bucket_seed=int(args.bucket_seed),
+        heatmap_enabled=bool(args.heatmap_enabled),
+        heatmap_pretrained_name=str(args.heatmap_pretrained_name),
+        heatmap_device=str(args.heatmap_device) if args.heatmap_device is not None else None,
     )
 
 
